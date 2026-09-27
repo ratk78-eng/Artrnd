@@ -61,7 +61,19 @@ def prolong(shape,axis,amount,name):
         raise ValueError('Некорректный припуск: '+name)
     return result
 
-def write_step(jobs,source_paths,axis,stock,kerf,allowance,folder):
+def along_x(shape,axis):
+    """Rotate a part so its length axis points along +X (the +axis end stays the far end)."""
+    if axis=='x':return shape
+    from math import pi
+    from OCP.gp import gp_Trsf,gp_Ax1,gp_Pnt,gp_Dir
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+    tr=gp_Trsf()
+    if axis=='y':tr.SetRotation(gp_Ax1(gp_Pnt(0,0,0),gp_Dir(0,0,1)),-pi/2)
+    else:tr.SetRotation(gp_Ax1(gp_Pnt(0,0,0),gp_Dir(0,1,0)),pi/2)
+    return BRepBuilderAPI_Transform(shape,tr,True).Shape()
+
+def write_step(jobs,source_paths,stock,kerf,allowance,folder):
+    """One STEP per stock; every part is turned so its own length axis runs along X."""
     from OCP.gp import gp_Vec,gp_Trsf
     from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
     from OCP.TopoDS import TopoDS_Compound
@@ -75,16 +87,20 @@ def write_step(jobs,source_paths,axis,stock,kerf,allowance,folder):
     from OCP.TopExp import TopExp_Explorer
     from OCP.TopAbs import TopAbs_SOLID
     originals={key:load(path) for key,path in source_paths.items()}
-    enlarged={key:prolong(shape,axis,allowance,Path(source_paths[key]).name) for key,shape in originals.items()}
+    axes={p['source']:p.get('axis') for job in jobs for p in job['parts']}
+    for key,axis in axes.items():
+        if axis not in ('x','y','z'):raise ValueError('Не задана ось детали: '+Path(source_paths[key]).name)
+    # the allowance is added along the part's own axis, then both copies are turned to X
+    turned={key:along_x(originals[key],axis) for key,axis in axes.items()}
+    enlarged={key:along_x(prolong(originals[key],axis,allowance,Path(source_paths[key]).name),axis) for key,axis in axes.items()}
     written=[]
     for job in jobs:
         compound=TopoDS_Compound();builder=BRep_Builder();builder.MakeCompound(compound)
         position=0.
         for i,p in enumerate(job['parts']):
-            key=p['source'];start,end=extent(originals[key],axis);length=end-start
+            key=p['source'];start,end=extent(turned[key],'x');length=end-start
             if abs(length-p['length'])>0.1:raise ValueError('Длина CAD отличается от расчёта: '+Path(source_paths[key]).name)
-            offset=[0.,0.,0.];offset['xyz'.index(axis)]=position-start
-            tr=gp_Trsf();tr.SetTranslation(gp_Vec(*offset))
+            tr=gp_Trsf();tr.SetTranslation(gp_Vec(position-start,0.,0.))
             builder.Add(compound,BRepBuilderAPI_Transform(enlarged[key],tr,True).Shape())
             position+=length+allowance+(kerf if i<len(job['parts'])-1 else 0)
         if position>stock+0.02 or abs(stock-position-job['waste'])>0.11:raise ValueError('Баланс хлыста не сошёлся')
@@ -101,7 +117,7 @@ def write_step(jobs,source_paths,axis,stock,kerf,allowance,folder):
         if result.IsNull():raise RuntimeError('STEP пуст после записи')
         it=TopExp_Explorer(result,TopAbs_SOLID);count=0
         while it.More():count+=1;it.Next()
-        lo,hi=extent(result,axis)
+        lo,hi=extent(result,'x')
         if count!=len(job['parts']) or abs(lo)>0.2 or abs(hi-position)>0.2:
             raise RuntimeError(f'Проверка экспорта не пройдена: {path.name}, тел {count}, ожидается {len(job["parts"])}')
         written.append(path.name)

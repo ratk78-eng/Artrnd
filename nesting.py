@@ -9,7 +9,7 @@ def plan(rows,stock,kerf,allowance):
         if not isinstance(qty,int) or qty<1 or not isfinite(length) or length<=0 or length+allowance>stock:
             raise ValueError('Неверная длина/количество: '+row['name'])
         if len(parts)+qty>10000:raise ValueError('Максимум 10000 деталей')
-        parts.extend({'source':row['id'],'length':length,'name':row['name']} for _ in range(qty))
+        parts.extend({'source':row['id'],'length':length,'name':row['name'],'axis':row.get('axis')} for _ in range(qty))
     if not parts:raise ValueError('Нет деталей')
     parts.sort(key=lambda p:p['length'],reverse=True)
     bins=[]

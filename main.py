@@ -4,13 +4,21 @@ from tkinter import ttk,filedialog,messagebox,simpledialog
 from nesting import plan
 from cad import dimensions,write_step
 ROOT=Path(__file__).resolve().parent
+AUTO='Авто'
+
+def pick_axis(dims,choice):
+    # 'Авто' takes the longest extent: for a tube that is its length
+    return max('xyz',key=lambda a:dims[a]) if choice==AUTO else choice.lower()
+
+def part_label(p):
+    return p['name']+(f" [{p['axis'].upper()}]" if p.get('axis') else '')+' '+str(p['length'])
 
 class Nest(tk.Tk):
     def __init__(self):
         super().__init__();self.title('NEST — нестинг труб');self.geometry('1050x720')
         self.rows=[];self.jobs=None;self.folder=None;self.generation=0;self.busy=False
         self.vars={key:tk.StringVar(value=default) for key,default in [('stock','6000'),('kerf','3'),('add','0'),('maxwaste','150'),('overrun','150')]}
-        self.axis=tk.StringVar(value='X');self.status=tk.StringVar(value='Готово к загрузке STEP/IGES.')
+        self.axis=tk.StringVar(value=AUTO);self.status=tk.StringVar(value='Готово к загрузке STEP/IGES.')
         self.pending=queue.Queue();self.inspections=queue.Queue()
         threading.Thread(target=self.inspect_worker,daemon=True).start()
         self.build();self.poll_inspections()
@@ -23,16 +31,16 @@ class Nest(tk.Tk):
             e=ttk.Entry(settings,width=16,textvariable=self.vars[key]);e.grid(row=1,column=i,padx=5)
             e.bind('<KeyRelease>',lambda event:self.changed())
         ttk.Label(settings,text='Ось').grid(row=0,column=5)
-        box=ttk.Combobox(settings,textvariable=self.axis,values=['X','Y','Z'],state='readonly',width=6);box.grid(row=1,column=5)
+        box=ttk.Combobox(settings,textvariable=self.axis,values=[AUTO,'X','Y','Z'],state='readonly',width=6);box.grid(row=1,column=5)
         box.bind('<<ComboboxSelected>>',self.axis_change)
-        group=ttk.LabelFrame(outer,text='Детали — двойной щелчок меняет количество',padding=7);group.pack(fill='both',expand=True)
-        columns=('file','x','y','z','length','qty','state')
+        group=ttk.LabelFrame(outer,text='Детали — двойной щелчок: по «Ось» меняет ось X→Y→Z, по другим столбцам — количество',padding=7);group.pack(fill='both',expand=True)
+        columns=('file','x','y','z','axis','length','qty','state')
         self.table=ttk.Treeview(group,columns=columns,show='headings',selectmode='extended',height=9)
-        for col,title,width in [('file','CAD-файл',235),('x','X, мм',85),('y','Y, мм',85),('z','Z, мм',85),('length','Длина, мм',100),('qty','Кол-во',70),('state','Статус',220)]:
+        for col,title,width in [('file','CAD-файл',225),('x','X, мм',80),('y','Y, мм',80),('z','Z, мм',80),('axis','Ось',50),('length','Длина, мм',95),('qty','Кол-во',65),('state','Статус',200)]:
             self.table.heading(col,text=title);self.table.column(col,width=width,anchor='w' if col in ('file','state') else 'center')
         self.table.pack(side='left',fill='both',expand=True)
         scroll=ttk.Scrollbar(group,command=self.table.yview);scroll.pack(side='right',fill='y');self.table.configure(yscrollcommand=scroll.set)
-        self.table.bind('<Double-1>',self.edit_quantity)
+        self.table.bind('<Double-1>',self.double_click)
         row=ttk.Frame(outer);row.pack(fill='x',pady=5)
         for label,command in [('Добавить STEP/IGES',self.add_files),('Удалить строки',self.remove),('Пример',self.example),('Очистить',self.clear)]:ttk.Button(row,text=label,command=command).pack(side='left',padx=3)
         row=ttk.Frame(outer);row.pack(fill='x',pady=5)
@@ -51,12 +59,15 @@ class Nest(tk.Tk):
         self.table.delete(*self.table.get_children())
         for n,r in enumerate(self.rows):
             dims=r.get('dims') or {}
-            self.table.insert('', 'end',iid=str(n),values=(r['name'],*(dims.get(a,'') for a in 'xyz'),r.get('length',''),r['qty'],r['state']))
+            self.table.insert('', 'end',iid=str(n),values=(r['name'],*(dims.get(a,'') for a in 'xyz'),(r.get('axis') or '').upper(),r.get('length',''),r['qty'],r['state']))
+    def set_axis(self,row,axis):
+        row['axis']=axis;row['length']=row['dims'][axis]
     def axis_change(self,event=None):
-        self.changed()
-        for r in self.rows:
-            if r.get('dims'):r['length']=r['dims'][self.axis.get().lower()]
-        self.refresh();self.status.set('Ось изменена. Рассчитайте раскладку заново.')
+        selected=[self.rows[int(i)] for i in self.table.selection()]
+        targets=[r for r in (selected or self.rows) if r.get('dims')]
+        for r in targets:self.set_axis(r,pick_axis(r['dims'],self.axis.get()))
+        self.changed();self.refresh()
+        self.status.set(f'Ось изменена у строк: {len(targets)}'+(' (выделенные)' if selected else '')+'. Рассчитайте раскладку заново.')
     def add_files(self):
         names=filedialog.askopenfilenames(parent=self,filetypes=[('STEP / IGES','*.stp *.step *.igs *.iges')])
         if not names:return
@@ -65,7 +76,7 @@ class Nest(tk.Tk):
         for filename in names:
             p=Path(filename)
             if p.suffix.lower() not in ('.stp','.step','.igs','.iges'):continue
-            row={'id':max([r['id'] for r in self.rows],default=0)+1,'path':p,'name':p.name,'dims':None,'length':None,'qty':1,'state':'Чтение CAD…'}
+            row={'id':max([r['id'] for r in self.rows],default=0)+1,'path':p,'name':p.name,'dims':None,'axis':None,'length':None,'qty':1,'state':'Чтение CAD…'}
             self.rows.append(row);self.pending.put(row)
         self.refresh();self.status.set('Определяются размеры X/Y/Z…')
     def inspect_worker(self):
@@ -88,12 +99,19 @@ class Nest(tk.Tk):
     def inspected(self,row,dims,error):
         if not any(x is row for x in self.rows):return
         if error:row['state']='Ошибка';self.status.set(row['name']+': '+error)
-        else:row['dims']=dims;row['length']=dims[self.axis.get().lower()];row['state']='Готово';self.status.set('Размеры загружены. Проверьте ось и количество.')
+        else:row['dims']=dims;self.set_axis(row,pick_axis(dims,self.axis.get()));row['state']='Готово';self.status.set('Размеры загружены. Проверьте ось и количество.')
         self.refresh()
-    def edit_quantity(self,event):
+    def double_click(self,event):
         item=self.table.identify_row(event.y)
         if not item:return
         row=self.rows[int(item)]
+        if self.table.column(self.table.identify_column(event.x),'id')=='axis':self.cycle_axis(row)
+        else:self.edit_quantity(row)
+    def cycle_axis(self,row):
+        if not row.get('dims'):return
+        self.set_axis(row,'xyz'[('xyz'.index(row['axis'])+1)%3]);self.changed();self.refresh()
+        self.status.set(f"{row['name']}: ось {row['axis'].upper()}, длина {row['length']} мм. Рассчитайте раскладку заново.")
+    def edit_quantity(self,row):
         value=simpledialog.askinteger('Количество','Количество деталей',parent=self,initialvalue=row['qty'],minvalue=1,maxvalue=10000)
         if value is not None:row['qty']=value;self.changed();self.refresh()
     def remove(self):
@@ -101,7 +119,7 @@ class Nest(tk.Tk):
         self.changed();self.refresh()
     def clear(self):self.rows.clear();self.changed();self.refresh();self.status.set('Очищено')
     def example(self):
-        self.rows=[{'id':i,'path':None,'name':'Пример '+str(length),'dims':None,'length':length,'qty':qty,'state':'Только расчёт'} for i,(length,qty) in enumerate([(1768,4),(1263,24),(1563,6)],1)]
+        self.rows=[{'id':i,'path':None,'name':'Пример '+str(length),'dims':None,'axis':None,'length':length,'qty':qty,'state':'Только расчёт'} for i,(length,qty) in enumerate([(1768,4),(1263,24),(1563,6)],1)]
         self.changed();self.refresh();self.status.set('Пример не экспортируется в STEP.')
     def values(self):
         try:v={key:float(variable.get().replace(',','.')) for key,variable in self.vars.items()}
@@ -112,14 +130,14 @@ class Nest(tk.Tk):
         try:
             v=self.values()
             for r in self.rows:
-                if r['path'] is not None and r.get('dims') is None:raise ValueError('CAD ещё не прочитан: '+r['name'])
+                if r['path'] is not None and r.get('dims') is None:raise ValueError(('Ошибка чтения CAD: ' if r['state']=='Ошибка' else 'CAD ещё не прочитан: ')+r['name'])
             self.jobs=plan(self.rows,v['stock'],v['kerf'],v['add'])
-            self.snapshot=(self.generation,v,self.axis.get().lower(),{r['id']:r['path'] for r in self.rows if r['path']})
+            self.snapshot=(self.generation,v,{r['id']:r['path'] for r in self.rows if r['path']})
             self.text.delete('1.0','end')
             self.text.insert('end',f'Хлыстов: {len(self.jobs)}; деталей: {sum(len(j["parts"]) for j in self.jobs)}; отход: {sum(j["waste"] for j in self.jobs):.2f} мм\n')
             for j in self.jobs:
                 w=j['waste'];flag='ПЕРЕРАСХОД' if w>=v['overrun'] else 'ВЫШЕ МАКС. ОТХОДА' if w>v['maxwaste'] else 'OK'
-                self.text.insert('end',f"{j['number']}: "+' + '.join(p['name']+' '+str(p['length']) for p in j['parts'])+f' | отход {w:.2f} мм | {flag}\n')
+                self.text.insert('end',f"{j['number']}: "+' + '.join(part_label(p) for p in j['parts'])+f' | отход {w:.2f} мм | {flag}\n')
             self.csv.configure(state='normal');self.pdf.configure(state='normal');self.step.configure(state='normal' if all(r['path'] for r in self.rows) else 'disabled')
             self.status.set('Расчёт готов. Пороги отхода только отмечаются, не гарантируются алгоритмом.')
         except Exception as exc:self.changed();messagebox.showerror('Ошибка расчёта',str(exc),parent=self)
@@ -130,12 +148,12 @@ class Nest(tk.Tk):
     def export_worker(self,jobs,snapshot):
         folder=None
         try:
-            _,v,axis,sources=snapshot;root=ROOT/'exports';root.mkdir(parents=True,exist_ok=True)
+            _,v,sources=snapshot;root=ROOT/'exports';root.mkdir(parents=True,exist_ok=True)
             base=datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S');name=base;n=1
             while (root/name).exists():name=f'{base}_{n}';n+=1
             folder=root/name;folder.mkdir()
-            result=write_step(jobs,sources,axis,v['stock'],v['kerf'],v['add'],folder)
-            (folder/'manifest.json').write_text(json.dumps({'axis':axis,'parameters':v,'jobs':jobs,'files':result,'sourceFiles':{str(k):str(p) for k,p in sources.items()}},ensure_ascii=False,indent=2),encoding='utf8')
+            result=write_step(jobs,sources,v['stock'],v['kerf'],v['add'],folder)
+            (folder/'manifest.json').write_text(json.dumps({'layoutAxis':'x','parameters':v,'jobs':jobs,'files':result,'sourceFiles':{str(k):str(p) for k,p in sources.items()}},ensure_ascii=False,indent=2),encoding='utf8')
             error=None
         except Exception as exc:
             error=f'{type(exc).__name__}: {exc}';result=None
@@ -160,14 +178,14 @@ class Nest(tk.Tk):
         if not filename:return
         with open(filename,'w',encoding='utf-8-sig',newline='') as output:
             writer=csv.writer(output,delimiter=';');writer.writerow(['Хлыст','Детали','Отход, мм'])
-            for job in self.jobs:writer.writerow([job['number'],' | '.join(p['name']+' '+str(p['length']) for p in job['parts']),job['waste']])
+            for job in self.jobs:writer.writerow([job['number'],' | '.join(part_label(p) for p in job['parts']),job['waste']])
     def save_pdf(self):
         if not self.jobs:return
         filename=filedialog.asksaveasfilename(parent=self,defaultextension='.pdf',filetypes=[('PDF','*.pdf')],initialfile='NEST_report.pdf')
         if not filename:return
         try:
             from pdf_report import write_report
-            write_report(filename,self.jobs,self.snapshot[1],self.snapshot[2])
+            write_report(filename,self.jobs,self.snapshot[1])
         except ImportError:
             messagebox.showerror('Отчёт PDF','Не найден reportlab. Установите: C:/Python/python.exe -m pip install --user reportlab',parent=self)
         except Exception as exc:

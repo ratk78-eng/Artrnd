@@ -26,7 +26,7 @@ class InspectQueueTest(unittest.TestCase):
             self.wait(rows)
         self.assertEqual(peak[0],1)
         self.assertEqual([r['state'] for r in rows],['Готово']*5)
-        self.assertEqual([r['length'] for r in rows],[10.]*5)
+        self.assertEqual([(r['axis'],r['length']) for r in rows],[('z',30.)]*5)
     def test_error_keeps_queue_running(self):
         def fake(path):
             if path.name=='bad.step':raise ValueError('битый файл')
@@ -46,6 +46,39 @@ class InspectQueueTest(unittest.TestCase):
             self.wait([kept])
         self.assertEqual(seen,['kept.step'])
 
+class RowAxisTest(unittest.TestCase):
+    def setUp(self):
+        self.app=main.Nest();self.app.withdraw()
+        self.rows=[]
+        for i,dims in enumerate([{'x':50.,'y':50.,'z':1498.},{'x':50.,'y':1498.,'z':50.},{'x':480.,'y':30.,'z':30.}],1):
+            row={'id':i,'path':Path(f'{i}.step'),'name':f'{i}.step','dims':None,'axis':None,'length':None,'qty':1,'state':'Чтение CAD…'}
+            self.app.rows.append(row);self.app.inspected(row,dims,None);self.rows.append(row)
+    def tearDown(self):self.app.destroy()
+    def test_auto_picks_longest_extent_per_row(self):
+        self.assertEqual([(r['axis'],r['length']) for r in self.rows],[('z',1498.),('y',1498.),('x',480.)])
+        self.assertEqual([self.app.table.set(i,'axis') for i in self.app.table.get_children()],['Z','Y','X'])
+    def test_combobox_applies_to_selected_rows_only(self):
+        self.app.table.selection_set(['1']);self.app.axis.set('X');self.app.axis_change()
+        self.assertEqual([r['axis'] for r in self.rows],['z','x','x'])
+        self.assertEqual(self.rows[1]['length'],50.)
+    def test_combobox_without_selection_applies_to_all(self):
+        self.app.axis.set('Z');self.app.axis_change()
+        self.assertEqual([(r['axis'],r['length']) for r in self.rows],[('z',1498.),('z',50.),('z',30.)])
+    def test_new_rows_use_fixed_axis(self):
+        self.app.axis.set('Y')
+        row={'id':9,'path':Path('9.step'),'name':'9.step','dims':None,'axis':None,'length':None,'qty':1,'state':'Чтение CAD…'}
+        self.app.rows.append(row);self.app.inspected(row,{'x':1.,'y':2.,'z':3.},None)
+        self.assertEqual((row['axis'],row['length']),('y',2.))
+    def test_cycle_axis(self):
+        row=self.rows[2]
+        self.app.cycle_axis(row);self.assertEqual((row['axis'],row['length']),('y',30.))
+        self.app.cycle_axis(row);self.app.cycle_axis(row);self.assertEqual(row['axis'],'x')
+    def test_axis_reaches_plan_and_labels(self):
+        self.app.vars['stock'].set('6000');self.app.calculate()
+        parts=[p for j in self.app.jobs for p in j['parts']]
+        self.assertEqual(sorted(p['axis'] for p in parts),['x','y','z'])
+        self.assertIn('1.step [Z] 1498.0',self.app.text.get('1.0','end'))
+
 class ExportFolderTest(unittest.TestCase):
     def setUp(self):
         self.app=main.Nest();self.app.withdraw()
@@ -58,7 +91,7 @@ class ExportFolderTest(unittest.TestCase):
         v={'stock':1000.,'kerf':3.,'add':0.,'maxwaste':150.,'overrun':150.}
         with patch.object(main,'ROOT',root),patch.object(main,'write_step',lambda *a:['stock_001.step']),\
              patch.object(self.app,'export_done',lambda *a:done.append(a)),patch.object(main.messagebox,'showerror'):
-            self.app.export_worker([],(0,v,'x',{}))
+            self.app.export_worker([],(0,v,{}))
             deadline=time.time()+5
             while not done and time.time()<deadline:self.app.update();time.sleep(0.01)
         snapshot,folder,result,error=done[0]
