@@ -1,4 +1,4 @@
-import threading,time,unittest
+import tempfile,threading,time,unittest
 from pathlib import Path
 from unittest.mock import patch
 import main
@@ -45,5 +45,24 @@ class InspectQueueTest(unittest.TestCase):
             self.app.pending.put(gone);self.app.pending.put(kept)
             self.wait([kept])
         self.assertEqual(seen,['kept.step'])
+
+class ExportFolderTest(unittest.TestCase):
+    def setUp(self):
+        self.app=main.Nest();self.app.withdraw()
+        self.tmp=tempfile.TemporaryDirectory()
+    def tearDown(self):self.app.destroy();self.tmp.cleanup()
+    def test_creates_missing_parent_folders(self):
+        # installed build points ROOT at %LOCALAPPDATA%\NEST, which may not exist yet
+        root=Path(self.tmp.name)/'LocalAppData'/'NEST'
+        done=[]
+        v={'stock':1000.,'kerf':3.,'add':0.,'maxwaste':150.,'overrun':150.}
+        with patch.object(main,'ROOT',root),patch.object(main,'write_step',lambda *a:['stock_001.step']),\
+             patch.object(self.app,'export_done',lambda *a:done.append(a)),patch.object(main.messagebox,'showerror'):
+            self.app.export_worker([],(0,v,'x',{}))
+            deadline=time.time()+5
+            while not done and time.time()<deadline:self.app.update();time.sleep(0.01)
+        snapshot,folder,result,error=done[0]
+        self.assertIsNone(error);self.assertEqual(folder.parent,root/'exports')
+        self.assertTrue((folder/'manifest.json').is_file())
 
 if __name__=='__main__':unittest.main()

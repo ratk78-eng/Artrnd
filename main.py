@@ -130,7 +130,7 @@ class Nest(tk.Tk):
     def export_worker(self,jobs,snapshot):
         folder=None
         try:
-            _,v,axis,sources=snapshot;root=ROOT/'exports';root.mkdir(exist_ok=True)
+            _,v,axis,sources=snapshot;root=ROOT/'exports';root.mkdir(parents=True,exist_ok=True)
             base=datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S');name=base;n=1
             while (root/name).exists():name=f'{base}_{n}';n+=1
             folder=root/name;folder.mkdir()
