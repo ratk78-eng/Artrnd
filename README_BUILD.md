@@ -2,7 +2,7 @@
 
 Выбрана связка PyInstaller `--onedir` + Inno Setup 6: на выходе один файл `NEST_Setup.exe`, а после установки — ярлык на один `NEST.exe`. Python/OCP/ReportLab на компьютере получателя не нужны. Создавать Windows EXE следует на Windows: PyInstaller не является кросс-компилятором.
 
-1. Скопируйте **только** `build_installer.py`, `build_installer.bat`, `NEST.iss` в папку **проверенной вами настольной версии**, где есть `main.py`, `cad.py` (последняя CAD-ревизия), `nesting.py`, `pdf_report.py` (после PDF-патча). Не надо прикладывать `.venv`, `exports`, исходные STEP.
+1. Сборочные файлы `build_installer.py`, `build_installer.bat`, `NEST.iss` лежат в корне проекта рядом с `main.py`, `cad.py`, `nesting.py`, `pdf_report.py`. `.venv`, `exports` и исходные STEP в сборку не попадают.
 2. На машине сборки установите `C:\Python\python.exe -m pip install --user pyinstaller`. OCP и ReportLab должны быть доступны в **том же Python**: `C:\Python\python.exe -c "import OCP,reportlab; print('OK')"`.
 3. Установите Inno Setup 6 на **машине сборки**. Если путь нестандартный, задайте `set INNO_ISCC=C:\путь\ISCC.exe` в текущем cmd.
 4. Откройте cmd в папке проекта и запускайте именно `C:\Python\python.exe build_installer.py` (так сборка возьмёт установленный OCP). Или `build_installer.bat`, если `python` указывает на тот же интерпретатор.
