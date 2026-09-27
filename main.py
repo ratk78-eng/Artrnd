@@ -1,4 +1,4 @@
-import csv,datetime,json,math,os,threading,tkinter as tk
+import csv,datetime,json,math,os,queue,threading,tkinter as tk
 from pathlib import Path
 from tkinter import ttk,filedialog,messagebox,simpledialog
 from nesting import plan
@@ -11,7 +11,9 @@ class Nest(tk.Tk):
         self.rows=[];self.jobs=None;self.folder=None;self.generation=0;self.busy=False
         self.vars={key:tk.StringVar(value=default) for key,default in [('stock','6000'),('kerf','3'),('add','0'),('maxwaste','150'),('overrun','150')]}
         self.axis=tk.StringVar(value='X');self.status=tk.StringVar(value='Готово к загрузке STEP/IGES.')
-        self.build()
+        self.pending=queue.Queue();self.inspections=queue.Queue()
+        threading.Thread(target=self.inspect_worker,daemon=True).start()
+        self.build();self.poll_inspections()
     def build(self):
         outer=ttk.Frame(self,padding=10);outer.pack(fill='both',expand=True)
         ttk.Label(outer,text='NEST — раскладка труб',font=('Segoe UI',17,'bold')).pack(anchor='w')
@@ -64,13 +66,25 @@ class Nest(tk.Tk):
             p=Path(filename)
             if p.suffix.lower() not in ('.stp','.step','.igs','.iges'):continue
             row={'id':max([r['id'] for r in self.rows],default=0)+1,'path':p,'name':p.name,'dims':None,'length':None,'qty':1,'state':'Чтение CAD…'}
-            self.rows.append(row);threading.Thread(target=self.inspect_worker,args=(row,),daemon=True).start()
+            self.rows.append(row);self.pending.put(row)
         self.refresh();self.status.set('Определяются размеры X/Y/Z…')
-    def inspect_worker(self,row):
-        try:dims=dimensions(row['path']);error=None
-        except Exception as e:dims=None;error=f'{type(e).__name__}: {e}'
-        try:self.after(0,lambda:self.inspected(row,dims,error))
-        except RuntimeError:pass
+    def inspect_worker(self):
+        # OCP readers share global settings, so CAD files are read one at a time
+        while True:
+            row=self.pending.get()
+            if not any(x is row for x in self.rows):continue
+            try:dims=dimensions(row['path']);error=None
+            except Exception as e:dims=None;error=f'{type(e).__name__}: {e}'
+            self.inspections.put((row,dims,error))
+    def poll_inspections(self):
+        # Tk is touched only from the GUI thread: results are drained here
+        while True:
+            try:row,dims,error=self.inspections.get_nowait()
+            except queue.Empty:break
+            self.inspected(row,dims,error)
+        self.poll_id=self.after(100,self.poll_inspections)
+    def destroy(self):
+        self.after_cancel(self.poll_id);super().destroy()
     def inspected(self,row,dims,error):
         if not any(x is row for x in self.rows):return
         if error:row['state']='Ошибка';self.status.set(row['name']+': '+error)
