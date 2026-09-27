@@ -43,9 +43,10 @@ def prolong(shape,axis,amount,name):
     from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
     from OCP.BRepCheck import BRepCheck_Analyzer
     from OCP.gp import gp_Vec
+    as_face=getattr(TopoDS,'Face_s',None) or TopoDS.Face  # OCP 8 renamed Face_s to Face
     original_start,end=extent(shape,axis);faces=[];it=TopExp_Explorer(shape,TopAbs_FACE)
     while it.More():
-        face=TopoDS.Face_s(it.Current());lo,hi=extent(face,axis)
+        face=as_face(it.Current());lo,hi=extent(face,axis)
         if abs(lo-end)<0.02 and abs(hi-end)<0.02 and BRepAdaptor_Surface(face).GetType()==GeomAbs_Plane:faces.append(face)
         it.Next()
     if len(faces)!=1:raise ValueError(name+': для припуска нужен ровно один плоский конечный торец')
