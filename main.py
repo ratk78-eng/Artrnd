@@ -13,9 +13,41 @@ def pick_axis(dims,choice):
 def part_label(p):
     return p['name']+(f" [{p['axis'].upper()}]" if p.get('axis') else '')+' '+str(p['length'])
 
+def mm(x):
+    return f'{x:.2f}'.rstrip('0').rstrip('.')
+
+def stock_state(waste,v):
+    if waste>=v['overrun']:return 'Перерасход','over'
+    if waste>v['maxwaste']:return 'Выше макс. отхода','warn'
+    return 'OK','ok'
+
+def ranges(numbers):
+    # [1,2,3,5] -> '1–3, 5'
+    out=[];start=prev=numbers[0]
+    for n in numbers[1:]+[None]:
+        if n is not None and n==prev+1:prev=n;continue
+        out.append(str(start) if start==prev else f'{start}–{prev}');start=prev=n
+    return ', '.join(out)
+
+def group_jobs(jobs):
+    """Stocks with the same parts in the same order and the same waste are shown as one row."""
+    groups={}
+    for j in jobs:
+        key=(tuple((p['name'],p['length'],p.get('axis')) for p in j['parts']),round(j['waste'],6))
+        groups.setdefault(key,[]).append(j)
+    return list(groups.values())
+
+def count_parts(parts):
+    # identical parts inside one stock -> (part, count), in cutting order
+    counted=[]
+    for p in parts:
+        if counted and (counted[-1][0]['name'],counted[-1][0]['length'],counted[-1][0].get('axis'))==(p['name'],p['length'],p.get('axis')):counted[-1][1]+=1
+        else:counted.append([p,1])
+    return counted
+
 class Nest(tk.Tk):
     def __init__(self):
-        super().__init__();self.title('NEST — нестинг труб');self.geometry('1050x720')
+        super().__init__();self.title('NEST — нестинг труб');self.geometry('1100x860');self.minsize(900,700)
         self.rows=[];self.jobs=None;self.folder=None;self.generation=0;self.busy=False
         self.vars={key:tk.StringVar(value=default) for key,default in [('stock','6000'),('kerf','3'),('add','0'),('maxwaste','150'),('overrun','150')]}
         self.axis=tk.StringVar(value=AUTO);self.status=tk.StringVar(value='Готово к загрузке STEP/IGES.')
@@ -33,9 +65,9 @@ class Nest(tk.Tk):
         ttk.Label(settings,text='Ось').grid(row=0,column=5)
         box=ttk.Combobox(settings,textvariable=self.axis,values=[AUTO,'X','Y','Z'],state='readonly',width=6);box.grid(row=1,column=5)
         box.bind('<<ComboboxSelected>>',self.axis_change)
-        group=ttk.LabelFrame(outer,text='Детали — двойной щелчок: по «Ось» меняет ось X→Y→Z, по другим столбцам — количество',padding=7);group.pack(fill='both',expand=True)
+        group=ttk.LabelFrame(outer,text='Детали — двойной щелчок: по «Ось» меняет ось X→Y→Z, по другим столбцам — количество',padding=7);group.pack(fill='x')
         columns=('file','x','y','z','axis','length','qty','state')
-        self.table=ttk.Treeview(group,columns=columns,show='headings',selectmode='extended',height=9)
+        self.table=ttk.Treeview(group,columns=columns,show='headings',selectmode='extended',height=6)
         for col,title,width in [('file','CAD-файл',225),('x','X, мм',80),('y','Y, мм',80),('z','Z, мм',80),('axis','Ось',50),('length','Длина, мм',95),('qty','Кол-во',65),('state','Статус',200)]:
             self.table.heading(col,text=title);self.table.column(col,width=width,anchor='w' if col in ('file','state') else 'center')
         self.table.pack(side='left',fill='both',expand=True)
@@ -50,11 +82,67 @@ class Nest(tk.Tk):
         self.csv=ttk.Button(row,text='CSV',command=self.save_csv,state='disabled');self.csv.pack(side='left',padx=3)
         self.pdf=ttk.Button(row,text='Отчёт PDF',command=self.save_pdf,state='disabled');self.pdf.pack(side='left',padx=3)
         result=ttk.LabelFrame(outer,text='Результат',padding=7);result.pack(fill='both',expand=True)
-        self.text=tk.Text(result,height=11,wrap='word',font=('Consolas',10));self.text.pack(fill='both',expand=True)
-        ttk.Label(outer,textvariable=self.status,wraplength=990).pack(fill='x',pady=4)
+        self.summary=tk.StringVar(value='Нажмите «Рассчитать».')
+        ttk.Label(result,textvariable=self.summary,font=('Segoe UI',10,'bold')).pack(anchor='w')
+        frame=ttk.Frame(result);frame.pack(fill='both',expand=True,pady=(5,0))
+        self.result=ttk.Treeview(frame,columns=('axis','length','qty','waste','state'),show='tree headings',selectmode='browse',height=8)
+        self.result.heading('#0',text='Хлыст / деталь');self.result.column('#0',width=390,anchor='w')
+        for col,title,width in [('axis','Ось',55),('length','Длина, мм',95),('qty','Кол-во',75),('waste','Отход, мм',95),('state','Статус',150)]:
+            self.result.heading(col,text=title);self.result.column(col,width=width,anchor='w' if col=='state' else 'center')
+        self.result.tag_configure('stock',font=('Segoe UI',9,'bold'))
+        for tag,colour in [('ok','#1b7a3a'),('warn','#b36b00'),('over','#c62828')]:self.result.tag_configure(tag,foreground=colour)
+        self.result.pack(side='left',fill='both',expand=True)
+        scroll=ttk.Scrollbar(frame,command=self.result.yview);scroll.pack(side='right',fill='y');self.result.configure(yscrollcommand=scroll.set)
+        self.result.bind('<<TreeviewSelect>>',lambda event:self.draw_bar())
+        ttk.Label(result,text='Схема реза выбранного хлыста:').pack(anchor='w',pady=(6,0))
+        self.bar=tk.Canvas(result,height=54,bg='white',highlightthickness=1,highlightbackground='#c8ced6');self.bar.pack(fill='x')
+        self.bar.bind('<Configure>',lambda event:self.draw_bar())
+        self.groups=[]
+        ttk.Label(outer,textvariable=self.status,wraplength=1040).pack(fill='x',pady=4)
     def changed(self):
         self.generation+=1;self.jobs=None;self.folder=None
-        self.step.configure(state='disabled');self.open.configure(state='disabled');self.csv.configure(state='disabled');self.pdf.configure(state='disabled');self.text.delete('1.0','end')
+        self.step.configure(state='disabled');self.open.configure(state='disabled');self.csv.configure(state='disabled');self.pdf.configure(state='disabled')
+        self.show_result(None,None)
+    def show_result(self,jobs,v):
+        self.result.delete(*self.result.get_children());self.groups=[];self.shown=v
+        if not jobs:self.summary.set('Нажмите «Рассчитать».');self.draw_bar();return
+        parts=[p for j in jobs for p in j['parts']];states=[stock_state(j['waste'],v)[1] for j in jobs]
+        usage=100*sum(p['length'] for p in parts)/(len(jobs)*v['stock'])
+        text=f"Хлыстов: {len(jobs)}     Деталей: {len(parts)}     Отход: {mm(sum(j['waste'] for j in jobs))} мм     Использование: {usage:.1f} %"
+        if states.count('warn'):text+=f"     Выше макс. отхода: {states.count('warn')}"
+        if states.count('over'):text+=f"     Перерасход: {states.count('over')}"
+        self.summary.set(text)
+        self.groups=group_jobs(jobs)
+        for g,same in enumerate(self.groups):
+            job=same[0];state,tag=stock_state(job['waste'],v);numbers=[j['number'] for j in same]
+            title=(f'Хлыст {numbers[0]}' if len(same)==1 else f'Хлысты {ranges(numbers)}  ×{len(same)}')
+            self.result.insert('','end',iid=f'g{g}',text=title,open=True,tags=('stock',tag),
+                values=('','',f"{len(job['parts'])} шт.",mm(job['waste']),state))
+            for k,(p,n) in enumerate(count_parts(job['parts'])):
+                self.result.insert(f'g{g}','end',iid=f'g{g}p{k}',text=Path(p['name']).stem,
+                    values=((p.get('axis') or '—').upper(),mm(p['length']),n,'',''))
+        self.result.selection_set('g0')
+    def draw_bar(self):
+        c=self.bar;c.delete('all')
+        selected=self.result.selection()
+        if not self.groups or not selected:return
+        job=self.groups[int(selected[0].split('p')[0][1:])][0];v=self.shown
+        width=max(c.winfo_width(),200);left=8;scale=(width-2*left)/v['stock'];top,bottom=8,40;x=left
+        for i,p in enumerate(job['parts']):
+            w=(p['length']+v['add'])*scale
+            c.create_rectangle(x,top,x+w,bottom,fill=('#9cc3e6','#c4dcf0')[i%2],outline='#4a78a8')
+            label=Path(p['name']).stem+' · '+mm(p['length'])
+            if w>60:c.create_text(x+w/2,(top+bottom)/2,text=label if len(label)*6<w else mm(p['length']),font=('Segoe UI',8))
+            x+=w
+            if i<len(job['parts'])-1:
+                cut=max(v['kerf']*scale,2)  # a 3 mm cut is below one pixel at this scale
+                c.create_rectangle(x,top,x+cut,bottom,fill='#333333',outline='');x+=cut
+        if job['waste']>0 and x<width-left:
+            state,tag=stock_state(job['waste'],v)
+            c.create_rectangle(x,top,width-left,bottom,fill='#e6e6e6',outline='#9a9a9a',stipple='gray50')
+            if width-left-x>50:c.create_text((x+width-left)/2,(top+bottom)/2,text='отход '+mm(job['waste']),font=('Segoe UI',8),fill={'ok':'#1b7a3a','warn':'#b36b00','over':'#c62828'}[tag])
+        c.create_text(left,bottom+8,text='0',anchor='w',font=('Segoe UI',7),fill='#666666')
+        c.create_text(width-left,bottom+8,text=mm(v['stock'])+' мм',anchor='e',font=('Segoe UI',7),fill='#666666')
     def refresh(self):
         self.table.delete(*self.table.get_children())
         for n,r in enumerate(self.rows):
@@ -133,11 +221,7 @@ class Nest(tk.Tk):
                 if r['path'] is not None and r.get('dims') is None:raise ValueError(('Ошибка чтения CAD: ' if r['state']=='Ошибка' else 'CAD ещё не прочитан: ')+r['name'])
             self.jobs=plan(self.rows,v['stock'],v['kerf'],v['add'])
             self.snapshot=(self.generation,v,{r['id']:r['path'] for r in self.rows if r['path']})
-            self.text.delete('1.0','end')
-            self.text.insert('end',f'Хлыстов: {len(self.jobs)}; деталей: {sum(len(j["parts"]) for j in self.jobs)}; отход: {sum(j["waste"] for j in self.jobs):.2f} мм\n')
-            for j in self.jobs:
-                w=j['waste'];flag='ПЕРЕРАСХОД' if w>=v['overrun'] else 'ВЫШЕ МАКС. ОТХОДА' if w>v['maxwaste'] else 'OK'
-                self.text.insert('end',f"{j['number']}: "+' + '.join(part_label(p) for p in j['parts'])+f' | отход {w:.2f} мм | {flag}\n')
+            self.show_result(self.jobs,v)
             self.csv.configure(state='normal');self.pdf.configure(state='normal');self.step.configure(state='normal' if all(r['path'] for r in self.rows) else 'disabled')
             self.status.set('Расчёт готов. Пороги отхода только отмечаются, не гарантируются алгоритмом.')
         except Exception as exc:self.changed();messagebox.showerror('Ошибка расчёта',str(exc),parent=self)

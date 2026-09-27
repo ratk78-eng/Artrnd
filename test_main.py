@@ -77,7 +77,41 @@ class RowAxisTest(unittest.TestCase):
         self.app.vars['stock'].set('6000');self.app.calculate()
         parts=[p for j in self.app.jobs for p in j['parts']]
         self.assertEqual(sorted(p['axis'] for p in parts),['x','y','z'])
-        self.assertIn('1.step [Z] 1498.0',self.app.text.get('1.0','end'))
+        rows=[self.app.result.item(i) for g in self.app.result.get_children() for i in self.app.result.get_children(g)]
+        self.assertIn(('1','Z','1498'),[(r['text'],*map(str,r['values'][:2])) for r in rows])
+
+class ResultViewTest(unittest.TestCase):
+    V={'stock':6000.,'kerf':3.,'add':0.,'maxwaste':150.,'overrun':500.}
+    def setUp(self):self.app=main.Nest();self.app.withdraw()
+    def tearDown(self):self.app.destroy()
+    def show(self,rows):
+        jobs=main.plan(rows,self.V['stock'],self.V['kerf'],self.V['add']);self.app.show_result(jobs,self.V);self.app.update();return jobs
+    def test_ranges(self):
+        self.assertEqual(main.ranges([1,2,3,5,7,8]),'1–3, 5, 7–8');self.assertEqual(main.ranges([4]),'4')
+    def test_identical_stocks_are_grouped_and_parts_counted(self):
+        # 1498 ×4 fits one stock (5992+3*3=6001 > 6000 → 3 per stock): 12 tubes → 4 identical stocks
+        jobs=self.show([{'id':1,'name':'Труба 50.stp','length':1498.,'qty':12,'axis':'z'}])
+        tree=self.app.result;groups=tree.get_children()
+        self.assertEqual(len(jobs),4);self.assertEqual(len(groups),1)
+        self.assertEqual(tree.item(groups[0])['text'],'Хлысты 1–4  ×4')
+        child=tree.item(tree.get_children(groups[0])[0])
+        self.assertEqual((child['text'],*map(str,child['values'][:3])),('Труба 50','Z','1498','3'))
+    def test_summary_and_status_colours(self):
+        self.show([{'id':1,'name':'a','length':5000.,'qty':1,'axis':'x'},{'id':2,'name':'b','length':5800.,'qty':1,'axis':'x'},{'id':3,'name':'c','length':5900.,'qty':1,'axis':'x'}])
+        summary=self.app.summary.get()
+        self.assertIn('Хлыстов: 3',summary);self.assertIn('Перерасход: 1',summary);self.assertIn('Выше макс. отхода: 1',summary)
+        tags=[self.app.result.item(g)['tags'][1] for g in self.app.result.get_children()]
+        self.assertEqual(sorted(tags),['ok','over','warn'])
+    def test_bar_is_drawn_and_follows_selection(self):
+        self.show([{'id':1,'name':'a','length':2000.,'qty':2,'axis':'x'},{'id':2,'name':'b','length':5000.,'qty':1,'axis':'x'}])
+        self.assertTrue(self.app.bar.find_all())
+        texts=lambda:[self.app.bar.itemcget(i,'text') for i in self.app.bar.find_all() if self.app.bar.type(i)=='text']
+        first=texts();self.app.result.selection_set('g1');self.app.update()
+        self.assertNotEqual(first,texts())
+    def test_changed_clears_result(self):
+        self.show([{'id':1,'name':'a','length':1000.,'qty':1,'axis':'x'}])
+        self.app.changed()
+        self.assertEqual(self.app.result.get_children(),());self.assertEqual(self.app.bar.find_all(),())
 
 class ExportFolderTest(unittest.TestCase):
     def setUp(self):
