@@ -1,7 +1,7 @@
 import csv,datetime,json,math,os,queue,threading,tkinter as tk
 from pathlib import Path
 from tkinter import ttk,filedialog,messagebox,simpledialog
-from nesting import plan
+from nesting import plan,lower_bound
 from cad import dimensions,write_step
 ROOT=Path(__file__).resolve().parent
 AUTO='Авто'
@@ -103,12 +103,14 @@ class Nest(tk.Tk):
         self.generation+=1;self.jobs=None;self.folder=None
         self.step.configure(state='disabled');self.open.configure(state='disabled');self.csv.configure(state='disabled');self.pdf.configure(state='disabled')
         self.show_result(None,None)
-    def show_result(self,jobs,v):
+    def show_result(self,jobs,v,bound=None):
         self.result.delete(*self.result.get_children());self.groups=[];self.shown=v
         if not jobs:self.summary.set('Нажмите «Рассчитать».');self.draw_bar();return
         parts=[p for j in jobs for p in j['parts']];states=[stock_state(j['waste'],v)[1] for j in jobs]
         usage=100*sum(p['length'] for p in parts)/(len(jobs)*v['stock'])
-        text=f"Хлыстов: {len(jobs)}     Деталей: {len(parts)}     Отход: {mm(sum(j['waste'] for j in jobs))} мм     Использование: {usage:.1f} %"
+        text=f"Хлыстов: {len(jobs)}"
+        if bound:text+=' (меньше невозможно)' if len(jobs)<=bound else f' (оценка снизу: {bound})'
+        text+=f"     Деталей: {len(parts)}     Отход: {mm(sum(j['waste'] for j in jobs))} мм     Использование: {usage:.1f} %"
         if states.count('warn'):text+=f"     Выше макс. отхода: {states.count('warn')}"
         if states.count('over'):text+=f"     Перерасход: {states.count('over')}"
         self.summary.set(text)
@@ -221,7 +223,7 @@ class Nest(tk.Tk):
                 if r['path'] is not None and r.get('dims') is None:raise ValueError(('Ошибка чтения CAD: ' if r['state']=='Ошибка' else 'CAD ещё не прочитан: ')+r['name'])
             self.jobs=plan(self.rows,v['stock'],v['kerf'],v['add'])
             self.snapshot=(self.generation,v,{r['id']:r['path'] for r in self.rows if r['path']})
-            self.show_result(self.jobs,v)
+            self.show_result(self.jobs,v,lower_bound(self.rows,v['stock'],v['kerf'],v['add']))
             self.csv.configure(state='normal');self.pdf.configure(state='normal');self.step.configure(state='normal' if all(r['path'] for r in self.rows) else 'disabled')
             self.status.set('Расчёт готов. Пороги отхода только отмечаются, не гарантируются алгоритмом.')
         except Exception as exc:self.changed();messagebox.showerror('Ошибка расчёта',str(exc),parent=self)
