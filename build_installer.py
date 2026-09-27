@@ -15,9 +15,16 @@ ISCC_CANDIDATES=[Path(os.environ.get('INNO_ISCC','')) if os.environ.get('INNO_IS
     Path(os.environ.get('ProgramFiles(x86)','C:/Program Files (x86)'))/'Inno Setup 6'/'ISCC.exe',
     Path(os.environ.get('ProgramFiles','C:/Program Files'))/'Inno Setup 6'/'ISCC.exe']
 
-def run(*args):
-    print('>',*[str(a) for a in args],flush=True)
-    subprocess.run([str(a) for a in args],cwd=ROOT,check=True)
+def run(*args,attempts=1):
+    # On some machines Windows randomly refuses CreateProcess (WinError 5) or python.exe crashes;
+    # steps that spawn many Python processes are retried instead of failing the whole build
+    for attempt in range(1,attempts+1):
+        print('>',*[str(a) for a in args],flush=True)
+        try:
+            subprocess.run([str(a) for a in args],cwd=ROOT,check=True);return
+        except (subprocess.CalledProcessError,OSError) as exc:
+            if attempt==attempts:raise
+            print(f'Сбой запуска ({exc}); повтор {attempt+1} из {attempts}…',flush=True)
 
 def main():
     if sys.platform!='win32' or sys.maxsize<=2**32:raise RuntimeError('Собирать только на 64-битной Windows')
@@ -25,7 +32,7 @@ def main():
         if not (ROOT/name).is_file():raise FileNotFoundError('Не найден '+name+'; поместите сборочный комплект рядом с проверенными исходниками')
     for name in ('main.py','cad.py','nesting.py','pdf_report.py'):
         ast.parse((ROOT/name).read_text(encoding='utf-8'))
-    run(sys.executable,'-c','import tkinter; import OCP.STEPControl; import OCP.STEPCAFControl; import reportlab; print("Dependencies OK")')
+    run(sys.executable,'-c','import tkinter; import OCP.STEPControl; import OCP.STEPCAFControl; import reportlab; print("Dependencies OK")',attempts=3)
     if (ROOT/'test_nesting.py').is_file():run(sys.executable,'-m','unittest','test_nesting.py')
     STAGE.mkdir(parents=True,exist_ok=True)
     for name in ('cad.py','nesting.py','pdf_report.py'):shutil.copy2(ROOT/name,STAGE/name)
@@ -40,7 +47,7 @@ def main():
     run(sys.executable,'-m','PyInstaller','--noconfirm','--clean','--onedir','--windowed',
         '--name','NEST','--distpath',DIST,'--workpath',WORK,'--specpath',SPEC,
         '--paths',STAGE,'--collect-all','OCP','--collect-all','reportlab',
-        '--hidden-import','cad','--hidden-import','nesting','--hidden-import','pdf_report',STAGE/'main.py')
+        '--hidden-import','cad','--hidden-import','nesting','--hidden-import','pdf_report',STAGE/'main.py',attempts=3)
     executable=DIST/'NEST'/'NEST.exe'
     if not executable.is_file():raise RuntimeError('PyInstaller не создал NEST.exe')
     print('Приложение собрано:',executable,flush=True)
