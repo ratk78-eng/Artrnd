@@ -155,12 +155,13 @@ class Kompas:
     def close_current(self) -> bool:
         """Closes the document this session made, without saving (a test build)."""
         doc7 = self._activate()
-        if doc7 is not None:
-            doc7.Close(0)   # kdDoNotSaveChanges
-        elif self.cur is not None and self._alive_ref(self.cur):
-            self.cur.close()   # API5: closes without asking
-        else:
+        if doc7 is None and self.cur is not None and self._alive_ref(self.cur):
+            # just built, it is the active one (KOMPAS's Documents list can miss it); API5's close()
+            # is not used: it may ask whether to save, and that dialog blocks KOMPAS
+            doc7 = self.k7.ActiveDocument
+        if doc7 is None:
             return False
+        doc7.Close(0)   # kdDoNotSaveChanges
         self.cur, self.cur_kind = None, None
         self.sketches.clear()
         return True
