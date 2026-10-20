@@ -1,0 +1,967 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>КОМПАС MCP</title>
+<style>
+/* Visual language modelled on Autodesk Fusion: dark application bar, light ribbon toolbar with
+   grouped icon commands, floating Browser panel, gradient viewport, palettes and a bottom timeline. */
+:root {
+  --appbar: #2f3236; --appbar-text: #e8e8e8; --appbar-hover: #44484d;
+  --toolbar: #f5f5f5; --toolbar-border: #d4d4d4; --group-label: #5a5a5a;
+  --panel: #fbfbfb; --panel-head: #ebebeb; --panel-border: #c9c9c9; --panel-shadow: 0 2px 8px rgba(0,0,0,.18);
+  --text: #262626; --muted: #6e6e6e; --hover: #e3eef8;
+  --accent: #0696d7; --accent-dark: #0679b0; --accent-text: #fff;
+  --vp-top: #fdfdfd; --vp-bottom: #c9d0d6;
+  --timeline: #ececec; --ok: #3a9a3a; --err: #d23c2a; --warn: #e8a30c;
+  --input: #fff; --input-border: #bdbdbd; --code: #f0f0f0; --user: #e1f1fa;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --appbar: #1e1f22; --appbar-text: #dcdcdc; --appbar-hover: #34363a;
+    --toolbar: #3b3d41; --toolbar-border: #26272a; --group-label: #b4b4b4;
+    --panel: #34363a; --panel-head: #2b2d30; --panel-border: #1f2023; --panel-shadow: 0 2px 10px rgba(0,0,0,.5);
+    --text: #e6e6e6; --muted: #a2a2a2; --hover: #2c4657;
+    --vp-top: #5c6168; --vp-bottom: #2b2e33;
+    --timeline: #2b2d30; --input: #26282b; --input-border: #4a4c50; --code: #2a2c30; --user: #1f3a4a;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; font: 13px/1.45 "Segoe UI", "Artifakt Element", system-ui, sans-serif; color: var(--text);
+  background: var(--appbar); display: grid; grid-template-rows: 34px 74px 1fr 40px; overflow: hidden; }
+button { font: inherit; color: inherit; cursor: pointer; }
+input, select, textarea { font: inherit; color: var(--text); background: var(--input); border: 1px solid var(--input-border);
+  border-radius: 2px; padding: 5px 7px; width: 100%; }
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+svg { display: block; }
+
+/* ---------- application bar ---------- */
+#appbar { display: flex; align-items: center; gap: 2px; padding: 0 8px; color: var(--appbar-text); }
+#appbar .logo { display: flex; align-items: center; gap: 8px; font-weight: 600; letter-spacing: .02em; margin-right: 10px; }
+.abtn { background: none; border: 0; height: 28px; min-width: 30px; padding: 0 6px; border-radius: 3px; display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--appbar-text); }
+.abtn:hover { background: var(--appbar-hover); }
+#doctab { margin-left: 18px; height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 14px; background: var(--toolbar); color: var(--text); border-radius: 4px 4px 0 0; align-self: flex-end; font-weight: 600; }
+#appbar .spacer { flex: 1; }
+#kchip { display: flex; align-items: center; gap: 6px; padding: 0 10px; height: 24px; border-radius: 12px; background: rgba(255,255,255,.08); font-size: 12px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: #888; flex: none; }
+.dot.ok { background: #4cc24c; } .dot.bad { background: #ff5a4a; }
+
+/* ---------- toolbar (ribbon) ---------- */
+#toolbar { background: var(--toolbar); border-bottom: 1px solid var(--toolbar-border); display: flex; align-items: stretch; padding: 4px 6px 0; gap: 2px; overflow-x: auto; }
+#workspace { display: flex; flex-direction: column; justify-content: center; padding: 0 14px 0 8px; border-right: 1px solid var(--toolbar-border); margin-right: 6px; }
+#workspace small { color: var(--group-label); font-size: 10px; letter-spacing: .06em; }
+#workspace b { font-size: 13px; letter-spacing: .03em; }
+.group { display: flex; flex-direction: column; border-right: 1px solid var(--toolbar-border); padding: 0 6px; }
+.group .cmds { display: flex; gap: 2px; flex: 1; align-items: center; }
+.group .glabel { text-align: center; font-size: 10px; font-weight: 600; letter-spacing: .06em; color: var(--group-label); padding: 1px 0 4px; text-transform: uppercase; }
+.tbtn { background: none; border: 1px solid transparent; border-radius: 3px; width: 54px; height: 46px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 10.5px; color: var(--text); }
+.tbtn:hover { background: var(--hover); border-color: #a9d3ea; }
+.tbtn:disabled { opacity: .45; cursor: default; background: none; border-color: transparent; }
+.tbtn svg { width: 26px; height: 26px; }
+.tbtn span { white-space: nowrap; max-width: 64px; overflow: hidden; text-overflow: ellipsis; }
+.group select { width: 190px; margin: 0 4px; }
+#examplesMenu { position: absolute; top: 108px; z-index: 30; background: var(--panel); border: 1px solid var(--panel-border); box-shadow: var(--panel-shadow); display: none; min-width: 380px; padding: 4px 0; }
+#examplesMenu.open { display: block; }
+#examplesMenu button { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 7px 14px; }
+#examplesMenu button:hover { background: var(--hover); }
+
+/* ---------- workspace ---------- */
+#work { position: relative; background: linear-gradient(var(--vp-top), var(--vp-bottom)); overflow: hidden; }
+#viewport { position: absolute; inset: 0 440px 0 0; display: flex; align-items: center; justify-content: center; }
+#viewport img { max-width: calc(100% - 340px); max-height: calc(100% - 60px); mix-blend-mode: multiply; margin-left: 260px; }
+@media (prefers-color-scheme: dark) { #viewport img { mix-blend-mode: normal; border-radius: 4px; } }
+#viewport .empty { margin-left: 260px; text-align: center; color: var(--muted); }
+#viewport .empty svg { margin: 0 auto 10px; opacity: .55; }
+#vpcaption { position: absolute; left: 290px; bottom: 10px; font-size: 12px; color: var(--muted); }
+#viewcube { position: absolute; right: 460px; top: 14px; width: 74px; height: 74px; opacity: .85; }
+
+.panel { position: absolute; background: var(--panel); border: 1px solid var(--panel-border); box-shadow: var(--panel-shadow); display: flex; flex-direction: column; }
+.phead { height: 28px; background: var(--panel-head); display: flex; align-items: center; gap: 6px; padding: 0 8px; font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; border-bottom: 1px solid var(--panel-border); flex: none; }
+.phead .spacer { flex: 1; }
+.phead button { background: none; border: 0; padding: 2px 4px; color: var(--muted); }
+
+/* Browser */
+#browser { left: 10px; top: 10px; width: 250px; max-height: calc(100% - 20px); }
+#browser .tree { overflow-y: auto; padding: 4px 0 8px; }
+.node > .row { display: flex; align-items: center; gap: 6px; padding: 3px 8px; cursor: pointer; user-select: none; }
+.node > .row:hover { background: var(--hover); }
+.node > .row .tw { width: 10px; color: var(--muted); font-size: 10px; transition: transform .15s; }
+.node.open > .row .tw { transform: rotate(90deg); }
+.node > .kids { display: none; padding-left: 22px; }
+.node.open > .kids { display: block; }
+.leaf { padding: 2px 8px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 6px; }
+.leaf .muted { color: var(--muted); }
+.ico { width: 14px; height: 14px; flex: none; }
+
+/* Assistant palette */
+#palette { right: 10px; top: 10px; bottom: 10px; width: 420px; }
+#log { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.msg { padding: 8px 10px; border-radius: 3px; white-space: pre-wrap; word-wrap: break-word; }
+.user { background: var(--user); border-left: 3px solid var(--accent); }
+.assistant { background: transparent; padding-left: 2px; }
+.md { white-space: normal; } .md ul { margin: 4px 0; padding-left: 20px; } .md hr { border: 0; border-top: 1px solid var(--panel-border); margin: 8px 0; }
+.md code { background: var(--code); padding: 0 4px; border-radius: 2px; font-size: 12px; }
+.tool { font-size: 12px; border: 1px solid var(--panel-border); border-radius: 3px; background: var(--toolbar); }
+.tool summary { cursor: pointer; padding: 4px 8px; display: flex; align-items: center; gap: 6px; list-style: none; }
+.tool summary::-webkit-details-marker { display: none; }
+.tool summary .name { font-family: Consolas, monospace; }
+.tool pre { background: var(--code); margin: 0; padding: 6px 8px; overflow-x: auto; font-size: 11.5px; border-top: 1px solid var(--panel-border); white-space: pre-wrap; }
+.tool img { max-width: 100%; display: block; background: #fff; }
+.tool.err { border-color: var(--err); } .tool.err summary { color: var(--err); }
+.tool.warn summary { color: var(--warn); }
+.error { color: var(--err); border: 1px solid var(--err); }
+.meta { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 8px; }
+.spin { width: 14px; height: 14px; border: 2px solid var(--panel-border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.thumbs { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.thumbs img { height: 70px; background: #fff; border: 1px solid var(--panel-border); }
+
+#tray { display: none; gap: 6px; flex-wrap: wrap; padding: 8px 10px 0; border-top: 1px solid var(--panel-border); }
+#tray.on { display: flex; }
+#tray .att { position: relative; width: 68px; cursor: pointer; font-size: 10px; color: var(--muted); text-align: center; }
+#tray .att img { width: 68px; height: 88px; object-fit: cover; object-position: top; border: 2px solid var(--panel-border); background: #fff; display: block; }
+#tray .att.sel img { border-color: var(--accent); }
+#tray .att.sel::after { content: "✓"; position: absolute; top: 3px; right: 4px; background: var(--accent); color: #fff; border-radius: 50%; width: 16px; height: 16px; font-size: 11px; line-height: 16px; }
+#tray .trayhint { width: 100%; font-size: 11px; color: var(--muted); }
+#tray > button { align-self: center; background: none; border: 1px solid var(--input-border); padding: 3px 8px; border-radius: 2px; }
+
+#ask { display: flex; gap: 6px; padding: 8px 10px 10px; border-top: 1px solid var(--panel-border); align-items: flex-end; }
+#ask textarea { resize: none; height: 58px; }
+.btn { border: 1px solid var(--input-border); background: var(--panel); border-radius: 2px; padding: 5px 14px; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.btn.primary:hover { background: var(--accent-dark); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.primary.stop { background: var(--err); border-color: var(--err); }
+.tool.reason summary { color: var(--muted); }
+.iconbtn { border: 1px solid var(--input-border); background: var(--panel); border-radius: 2px; width: 32px; height: 30px; display: flex; align-items: center; justify-content: center; }
+.iconbtn:hover { border-color: var(--accent); }
+body.drag #palette { outline: 3px dashed var(--accent); outline-offset: -3px; }
+
+/* ---------- timeline ---------- */
+#timeline { background: var(--timeline); border-top: 1px solid var(--toolbar-border); display: flex; align-items: center; gap: 4px; padding: 0 10px; overflow-x: auto; }
+#timeline .ctl { color: var(--muted); display: flex; gap: 2px; margin-right: 8px; }
+#timeline .ctl svg { width: 18px; height: 18px; }
+#tl { display: flex; align-items: center; gap: 3px; border-left: 1px solid var(--toolbar-border); padding-left: 10px; height: 28px; }
+.tli { width: 24px; height: 24px; border-radius: 2px; background: var(--panel); border: 1px solid var(--panel-border); display: flex; align-items: center; justify-content: center; position: relative; cursor: default; }
+.tli svg { width: 16px; height: 16px; }
+.tli.err { border-color: var(--err); background: #fbe3e0; }
+.tli.warn { border-color: var(--warn); }
+.tli.run { border-color: var(--accent); animation: pulse 1s infinite alternate; }
+@keyframes pulse { to { background: var(--hover); } }
+#tlempty { color: var(--muted); font-size: 12px; }
+
+/* ---------- dialog ---------- */
+#dlgBack { position: fixed; inset: 0; background: rgba(0,0,0,.25); display: none; z-index: 50; }
+#dlgBack.open { display: block; }
+#dlg { position: absolute; left: 50%; top: 80px; transform: translateX(-50%); width: 460px; max-width: calc(100% - 32px); max-height: calc(100% - 120px); }
+#dlg .body { padding: 12px 14px; overflow-y: auto; }
+#dlg .tabs { display: flex; border-bottom: 1px solid var(--panel-border); padding: 0 10px; gap: 2px; flex: none; }
+#dlg .tabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 12px; font-weight: 600; color: var(--muted); }
+#dlg .tabs button.on { color: var(--text); border-bottom-color: var(--accent); }
+#dlg .page { display: none; } #dlg .page.on { display: block; }
+#dlg label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 3px; }
+#dlg .row { display: flex; gap: 6px; align-items: center; }
+#dlg .help { font-size: 12px; color: var(--muted); margin-top: 4px; }
+#dlg .check { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; }
+#dlg .check input { width: auto; margin-top: 3px; }
+#dlg .slider { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); }
+#dlg .slider input { padding: 0; }
+#dlg .foot { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--panel-border); flex: none; }
+
+/* ---------- drawing review ---------- */
+#rvBack { position: fixed; inset: 34px 0 0 0; background: rgba(0,0,0,.3); display: none; z-index: 40; }
+#rvBack.open { display: block; }
+#review { position: absolute; inset: 12px; }
+#review .rvbody { flex: 1; display: grid; grid-template-columns: 1fr 470px; min-height: 0; }
+#rvLeft { overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; border-right: 1px solid var(--panel-border); }
+#rvRight { overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.cmp figure { margin: 0; background: #fff; border: 1px solid var(--panel-border); padding: 6px; display: flex; flex-direction: column; align-items: center; }
+.cmp figure img { max-width: 100%; max-height: 320px; cursor: zoom-in; }
+.cmp figcaption { font-size: 11px; color: #555; margin-top: 4px; }
+.rvstage { color: var(--muted); display: flex; gap: 8px; align-items: center; }
+table.dims { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.dims th { text-align: left; font-size: 11px; color: var(--muted); font-weight: 600; padding: 3px 4px; border-bottom: 1px solid var(--panel-border); }
+table.dims td { padding: 3px 4px; border-bottom: 1px solid var(--panel-border); vertical-align: middle; }
+table.dims input[type=number] { width: 74px; padding: 3px 5px; text-align: right; }
+table.dims input:not([type]) { padding: 3px 5px; text-align: left; }
+table.dims select { width: auto; padding: 2px 4px; }
+.cmp figure select { margin-top: 4px; width: auto; padding: 2px 4px; }
+table.dims tr.low td { background: rgba(232,163,12,.14); }
+table.dims tr.bad td { background: rgba(210,60,42,.14); }
+table.dims .orig { color: var(--muted); font-size: 11px; }
+.issue { padding: 6px 8px; border-left: 3px solid var(--warn); background: var(--toolbar); font-size: 12px; }
+.issue.error { border-left-color: var(--err); }
+.issue.ok { border-left-color: var(--ok); }
+.feat { font-size: 12px; margin: 0; padding-left: 18px; }
+.rvfoot { display: flex; gap: 8px; justify-content: flex-end; padding: 10px 12px; border-top: 1px solid var(--panel-border); flex: none; }
+.rvnote { display: flex; gap: 6px; }
+@media (max-width: 1000px) { #review .rvbody { grid-template-columns: 1fr; } }
+
+@media (max-width: 1000px) {
+  #browser, #viewcube, #vpcaption { display: none; }
+  #viewport { inset: 0 440px 0 0; } #viewport img, #viewport .empty { margin-left: 0; max-width: calc(100% - 40px); }
+}
+@media (max-width: 700px) {
+  body { grid-template-rows: 34px 74px 1fr 0; } #viewport { display: none; } #palette { left: 8px; right: 8px; width: auto; }
+}
+</style>
+</head>
+<body>
+<!-- SVG icon set -->
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <symbol id="i-cube" viewBox="0 0 24 24"><path d="M12 2 21 7v10l-9 5-9-5V7z" fill="#0696d7"/><path d="M12 2 21 7l-9 5-9-5z" fill="#6cc4ee"/><path d="M12 12v10l9-5V7z" fill="#0679b0"/></symbol>
+    <symbol id="i-new" viewBox="0 0 24 24"><path d="M5 3h9l5 5v13H5z" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M14 3v5h5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M12 11v7M8.5 14.5h7" stroke="#0696d7" stroke-width="2"/></symbol>
+    <symbol id="i-pdf" viewBox="0 0 24 24"><path d="M5 3h9l5 5v13H5z" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="12" width="13" height="6" rx="1" fill="#d23c2a"/><text x="4.4" y="16.8" font-size="5" font-weight="700" fill="#fff" font-family="Segoe UI">PDF</text></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10 8l6 4-6 4z" fill="#3a9a3a"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M19 12a7 7 0 1 1-2-5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M18 3v5h-5" fill="none" stroke="#0696d7" stroke-width="1.8"/></symbol>
+    <symbol id="i-camera" viewBox="0 0 24 24"><path d="M3 8h4l2-3h6l2 3h4v11H3z" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="13" r="3.5" fill="none" stroke="#0696d7" stroke-width="1.8"/></symbol>
+    <symbol id="i-iso" viewBox="0 0 24 24"><path d="M12 3 20 7.5v9L12 21l-8-4.5v-9z" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M12 3 20 7.5 12 12 4 7.5z" fill="#6cc4ee"/><path d="M12 12v9" stroke="currentColor" stroke-width="1.4"/></symbol>
+    <symbol id="i-front" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" fill="#6cc4ee" stroke="currentColor" stroke-width="1.4"/></symbol>
+    <symbol id="i-top" viewBox="0 0 24 24"><path d="M4 9 9 4h11l-5 5z" fill="#6cc4ee" stroke="currentColor" stroke-width="1.4"/><path d="M4 9h11v11H4zM15 9l5-5v11l-5 5" fill="none" stroke="currentColor" stroke-width="1.4"/></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24"><path d="M4 4h13l3 3v13H4z" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="7" y="4" width="8" height="5" fill="#0696d7"/><rect x="7" y="13" width="10" height="7" fill="none" stroke="currentColor" stroke-width="1.3"/></symbol>
+    <symbol id="i-export" viewBox="0 0 24 24"><path d="M5 3h9l5 5v13H5z" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M12 18v-7m-3 3 3-3 3 3" fill="none" stroke="#0696d7" stroke-width="1.8"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1" stroke="currentColor" stroke-width="1.6"/></symbol>
+    <symbol id="i-bulb" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.8.8 1 1.5 1 2.5h6c0-1 .2-1.7 1-2.5A6 6 0 0 0 12 3z" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M12 7v4" stroke="#e8a30c" stroke-width="2"/></symbol>
+    <symbol id="i-chip" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="9" y="9" width="6" height="6" fill="#0696d7"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4" stroke="currentColor" stroke-width="1.3"/></symbol>
+    <symbol id="i-tool" viewBox="0 0 24 24"><path d="M14 4a5 5 0 0 0 6 6l-9 9a2.1 2.1 0 0 1-3-3l9-9a5 5 0 0 0-3-3z" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+    <symbol id="i-doc" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+    <symbol id="i-sketch" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" fill="none" stroke="#0696d7" stroke-width="1.6"/><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+    <symbol id="i-extrude" viewBox="0 0 24 24"><path d="M4 16 12 20 20 16 12 12z" fill="#6cc4ee"/><path d="M4 16V8l8-4 8 4v8M12 12V4" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M12 12 4 8M12 12l8-4" stroke="currentColor" stroke-width="1.4"/></symbol>
+    <symbol id="i-cut" viewBox="0 0 24 24"><rect x="3" y="8" width="18" height="10" fill="#6cc4ee" stroke="currentColor" stroke-width="1.4"/><rect x="9" y="8" width="6" height="5" fill="var(--panel)" stroke="#d23c2a" stroke-width="1.6"/></symbol>
+    <symbol id="i-revolve" viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="8" ry="3.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M12 3v18" stroke="#0696d7" stroke-width="1.4" stroke-dasharray="3 2"/><path d="M18 9l2 3-3 1" fill="none" stroke="#0696d7" stroke-width="1.6"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M12 11v6M12 7v1" stroke="#0696d7" stroke-width="2"/></symbol>
+    <symbol id="i-2d" viewBox="0 0 24 24"><path d="M4 20h16M4 20V4" stroke="currentColor" stroke-width="1.5"/><path d="M7 16l4-7 4 4 4-6" fill="none" stroke="#0696d7" stroke-width="1.6"/></symbol>
+  </defs>
+</svg>
+
+<header id="appbar">
+  <div class="logo"><svg width="20" height="20"><use href="#i-cube"/></svg>КОМПАС MCP</div>
+  <button class="abtn" id="abNew" title="Новый диалог"><svg width="18" height="18"><use href="#i-new"/></svg></button>
+  <button class="abtn" id="abAttach" title="Загрузить чертёж"><svg width="18" height="18"><use href="#i-pdf"/></svg></button>
+  <div id="doctab"><svg width="16" height="16"><use href="#i-cube"/></svg><span>Диалог</span></div>
+  <div class="spacer"></div>
+  <div id="kchip" title="Состояние КОМПАС-3D"><span class="dot"></span><span>КОМПАС: проверка…</span></div>
+  <button class="abtn" id="abSettings" title="Настройки"><svg width="18" height="18"><use href="#i-gear"/></svg></button>
+</header>
+
+<nav id="toolbar">
+  <div id="workspace"><small>РАБОЧЕЕ ПРОСТРАНСТВО</small><b>ИИ-КОНСТРУКТОР</b></div>
+  <div class="group">
+    <div class="cmds">
+      <button class="tbtn" id="tbNew"><svg><use href="#i-new"/></svg><span>Новый</span></button>
+      <button class="tbtn" id="tbAttach"><svg><use href="#i-pdf"/></svg><span>Чертёж</span></button>
+      <button class="tbtn" id="tbReview" title="Разобрать приложенный чертёж с проверкой размеров"><svg><use href="#i-2d"/></svg><span>Разбор</span></button>
+      <button class="tbtn" id="tbExamples"><svg><use href="#i-bulb"/></svg><span>Примеры ▾</span></button>
+    </div>
+    <div class="glabel">Диалог</div>
+  </div>
+  <div class="group">
+    <div class="cmds">
+      <button class="tbtn" id="tbLaunch"><svg><use href="#i-play"/></svg><span>Запустить</span></button>
+      <button class="tbtn" id="tbRefresh"><svg><use href="#i-refresh"/></svg><span>Обновить</span></button>
+    </div>
+    <div class="glabel">КОМПАС-3D</div>
+  </div>
+  <div class="group">
+    <div class="cmds">
+      <button class="tbtn" data-view="iso"><svg><use href="#i-iso"/></svg><span>Изометрия</span></button>
+      <button class="tbtn" data-view="front"><svg><use href="#i-front"/></svg><span>Спереди</span></button>
+      <button class="tbtn" data-view="top"><svg><use href="#i-top"/></svg><span>Сверху</span></button>
+      <button class="tbtn" id="tbShot"><svg><use href="#i-camera"/></svg><span>Снимок</span></button>
+    </div>
+    <div class="glabel">Вид</div>
+  </div>
+  <div class="group">
+    <div class="cmds">
+      <button class="tbtn" id="tbSave"><svg><use href="#i-save"/></svg><span>Сохранить</span></button>
+      <button class="tbtn" id="tbExport"><svg><use href="#i-export"/></svg><span>Экспорт</span></button>
+    </div>
+    <div class="glabel">Файл</div>
+  </div>
+  <div class="group">
+    <div class="cmds">
+      <select id="tbModel" title="Модель ИИ"></select>
+      <button class="tbtn" id="tbSettings"><svg><use href="#i-gear"/></svg><span>Настройки</span></button>
+    </div>
+    <div class="glabel">Модель ИИ</div>
+  </div>
+</nav>
+<div id="examplesMenu">
+  <button>Построй деталь по приложенному чертежу. Сначала перечисли размеры, которые видишь, потом строй и сверь объём</button>
+  <button>Создай пластину 100 × 60 × 5 мм с четырьмя отверстиями Ø4 в 8 мм от краёв и сделай скриншот</button>
+  <button>Построй вал: Ø20 длиной 30 мм, затем Ø12 длиной 20 мм. Покажи скриншот и объём</button>
+  <button>Создай 2D-фрагмент: прямоугольник 120 × 80 и окружность Ø30 в центре, экспортируй в DXF</button>
+</div>
+
+<section id="work">
+  <div id="viewport">
+    <div class="empty" id="vpEmpty"><svg width="72" height="72"><use href="#i-cube"/></svg>
+      Здесь появится снимок модели из КОМПАС-3D.<br>Опишите деталь в панели ассистента справа.</div>
+  </div>
+  <div id="vpcaption"></div>
+  <svg id="viewcube" viewBox="0 0 80 80" aria-hidden="true">
+    <path d="M40 8 70 24v32L40 72 10 56V24z" fill="var(--panel)" stroke="var(--muted)" stroke-width="1"/>
+    <path d="M40 8 70 24 40 40 10 24z" fill="var(--hover)" stroke="var(--muted)" stroke-width="1"/>
+    <path d="M40 40v32" stroke="var(--muted)" stroke-width="1"/>
+    <text x="40" y="27" text-anchor="middle" font-size="8" fill="var(--muted)" font-family="Segoe UI">ВЕРХ</text>
+    <text x="24" y="54" text-anchor="middle" font-size="8" fill="var(--muted)" font-family="Segoe UI" transform="skewY(27) translate(0,-12)">ПЕРЕД</text>
+    <text x="56" y="54" text-anchor="middle" font-size="8" fill="var(--muted)" font-family="Segoe UI" transform="skewY(-27) translate(0,28)">ПРАВО</text>
+  </svg>
+
+  <aside class="panel" id="browser">
+    <div class="phead">Браузер</div>
+    <div class="tree">
+      <div class="node open"><div class="row"><span class="tw">▶</span><svg class="ico"><use href="#i-cube"/></svg><b>КОМПАС-3D</b></div>
+        <div class="kids" id="trKompas"><div class="leaf muted">проверка…</div></div></div>
+      <div class="node open"><div class="row"><span class="tw">▶</span><svg class="ico"><use href="#i-doc"/></svg>Документы</div>
+        <div class="kids" id="trDocs"></div></div>
+      <div class="node open"><div class="row"><span class="tw">▶</span><svg class="ico"><use href="#i-chip"/></svg>Модель ИИ</div>
+        <div class="kids" id="trModel"></div></div>
+      <div class="node"><div class="row"><span class="tw">▶</span><svg class="ico"><use href="#i-tool"/></svg><span id="trToolsTitle">Инструменты</span></div>
+        <div class="kids" id="trTools"></div></div>
+    </div>
+  </aside>
+
+  <aside class="panel" id="palette">
+    <div class="phead">Ассистент<span class="spacer"></span><button id="pNew" title="Новый диалог">Очистить</button></div>
+    <div id="log"></div>
+    <div id="tray"></div>
+    <form id="ask">
+      <input type="file" id="file" accept=".pdf,.png,.jpg,.jpeg,.dxf,.dwg,.cdw,.frw" hidden multiple>
+      <button type="button" class="iconbtn" id="btnAttach" title="Загрузить чертёж (PDF, PNG, JPG, DXF, DWG, CDW, FRW)"><svg width="18" height="18"><use href="#i-pdf"/></svg></button>
+      <textarea id="text" placeholder="Опишите деталь или приложите чертёж…"></textarea>
+      <button type="button" class="btn primary" id="btnSend">ОК</button>
+    </form>
+  </aside>
+</section>
+
+<footer id="timeline">
+  <div class="ctl" title="История операций">
+    <svg viewBox="0 0 24 24"><path d="M6 5v14M18 5 9 12l9 7z" fill="currentColor"/></svg>
+    <svg viewBox="0 0 24 24"><path d="M16 5 8 12l8 7z" fill="currentColor"/></svg>
+    <svg viewBox="0 0 24 24"><path d="M8 5l8 7-8 7z" fill="currentColor"/></svg>
+    <svg viewBox="0 0 24 24"><path d="M18 5v14M6 5l9 7-9 7z" fill="currentColor"/></svg>
+  </div>
+  <div id="tl"><span id="tlempty">История операций пуста</span></div>
+</footer>
+
+<div id="rvBack">
+  <div class="panel" id="review" role="dialog" aria-label="Проверка чертежа">
+    <div class="phead">Проверка чертежа<span class="spacer"></span><span id="rvTitle" style="text-transform:none;font-weight:400"></span><button id="rvX" title="Закрыть">✕</button></div>
+    <div class="rvbody">
+      <div id="rvLeft">
+        <div class="rvstage" id="rvStage"></div>
+        <div id="rvCompare"></div>
+      </div>
+      <div id="rvRight">
+        <div><b>Размеры, прочитанные с чертежа</b><div class="hint">Форму программа берёт с самих видов, числа — отсюда. Проверьте значения, ось и признак габарита. Жёлтым — модель не уверена, красным — участвуют в замечании.</div></div>
+        <table class="dims"><thead><tr><th>№</th><th>Что задаёт</th><th>Вид</th><th>Значение</th></tr></thead><tbody id="rvDims"></tbody></table>
+        <div><b>Замечания проверки</b></div>
+        <div id="rvIssues"></div>
+        <div><b>Что программа нашла на видах</b></div>
+        <ul class="feat" id="rvFeatures"></ul>
+        <div><b>Вопросы программы</b><div class="hint">Только то, что по видам не определить однозначно. Подставлен вероятный ответ.</div></div>
+        <div id="rvQuestions"></div>
+        <div><b>Результат построения</b></div>
+        <div id="rvResult" class="hint">ещё не строилось</div>
+        <div class="rvnote"><input id="rvNote" placeholder="Подсказка модели (необязательно): «в центре Ø20 на глубину 10, ниже квадрат»"></div>
+        <div class="rvnote"><button class="btn" id="rvReread" type="button">Прочитать размеры заново</button>
+          <button class="btn" id="rvAi" type="button" title="Локальная модель ИИ читает весь лист, её прочтение сравнивается с программным, затем деталь строится">Распознать с ИИ</button></div>
+      </div>
+    </div>
+    <div class="rvfoot">
+      <button class="btn" id="rvCancel" type="button">Отмена</button>
+      <button class="btn" id="rvCheck" type="button">Проверить и показать проекции</button>
+      <button class="btn primary" id="rvAccept" type="button" disabled>Принять деталь</button>
+    </div>
+  </div>
+</div>
+
+<div id="dlgBack">
+  <div class="panel" id="dlg" role="dialog" aria-label="Настройки">
+    <div class="phead">Настройки<span class="spacer"></span><button id="dlgX" title="Закрыть">✕</button></div>
+    <div class="tabs"><button class="on" data-page="pgModel">Модель</button><button data-page="pgAdv">Дополнительно</button></div>
+    <div class="body">
+      <div class="page on" id="pgModel">
+        <label for="preset">Сервер ИИ</label>
+        <select id="preset">
+          <option value="http://127.0.0.1:1234/v1">LM Studio</option>
+          <option value="http://127.0.0.1:11434/v1">Ollama</option>
+          <option value="http://127.0.0.1:8080/v1">llama.cpp server</option>
+          <option value="custom">Другой OpenAI-совместимый</option>
+        </select>
+        <label for="baseUrl">Адрес API</label>
+        <input id="baseUrl" placeholder="http://127.0.0.1:1234/v1">
+        <label for="model">Модель</label>
+        <div class="row"><select id="model"></select><button class="iconbtn" type="button" id="btnModels" title="Обновить список"><svg width="16" height="16"><use href="#i-refresh"/></svg></button></div>
+        <div class="help" id="modelHint"></div>
+        <label for="apiKey">API-ключ (если сервер его требует)</label>
+        <input id="apiKey" type="password" autocomplete="off">
+        <label for="drawingModel">Модель для разбора чертежей</label>
+        <select id="drawingModel"></select>
+        <div class="help">Нужна модель, которая понимает изображения и быстро отвечает: рассуждающие модели читают чертёж очень долго. «Как основная» — использовать модель выше.</div>
+        <label class="check"><input type="checkbox" id="vision"><span>Показывать модели снимки КОМПАС после операций<div class="help">Только для моделей, которые понимают изображения (vision).</div></span></label>
+      </div>
+      <div class="page" id="pgAdv">
+        <label for="temp">Температура: <b id="tempVal"></b></label>
+        <div class="slider">точно<input type="range" id="temp" min="0" max="1" step="0.05">свободно</div>
+        <div class="help">Насколько свободно модель выбирает ответ. Ближе к нулю — строже и предсказуемее, это лучше для построений по размерам. Ближе к единице — разнообразнее, но чаще ошибки. Рекомендуется 0,1–0,3.</div>
+        <label for="steps">Максимум шагов на запрос</label>
+        <input id="steps" type="number" min="1" max="100">
+        <div class="help">Сколько раз подряд модель может вызвать инструменты, прежде чем остановиться.</div>
+        <label for="sys">Системный промпт</label>
+        <textarea id="sys" rows="9"></textarea>
+        <div class="help">Постоянные инструкции для модели. <a href="#" id="sysReset">Вернуть стандартный</a></div>
+      </div>
+    </div>
+    <div class="foot"><button class="btn" id="dlgCancel" type="button">Отмена</button><button class="btn primary" id="dlgOk" type="button">ОК</button></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const log = $("log");
+let busy = false, settings = {}, defaults = {};
+
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+function icon(id, cls = "ico") { const s = document.createElementNS("http://www.w3.org/2000/svg", "svg"); s.setAttribute("class", cls); const u = document.createElementNS("http://www.w3.org/2000/svg", "use"); u.setAttribute("href", "#" + id); s.appendChild(u); return s; }
+function add(node) { log.appendChild(node); log.scrollTop = log.scrollHeight; return node; }
+async function api(path, opts = {}) { const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts }); return r.json(); }
+async function callTool(name, args = {}) { return api("/api/tool", { method: "POST", body: JSON.stringify({ name, args }) }); }
+
+// ---------- Markdown for replies ----------
+function md(text) {
+  const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const inline = s => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+    .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<i>$2</i>");
+  const out = []; let list = null;
+  for (const raw of text.split("\n")) {
+    const line = raw.trimEnd();
+    const li = line.match(/^\s*(?:[-*]|\d+\.)\s+(.*)$/);
+    if (li) { (list = list || []).push("<li>" + inline(li[1]) + "</li>"); continue; }
+    if (list) { out.push("<ul>" + list.join("") + "</ul>"); list = null; }
+    if (/^\s*(\*\*\*|---)\s*$/.test(line)) out.push("<hr>");
+    else if (/^#{1,4}\s/.test(line)) out.push("<b>" + inline(line.replace(/^#+\s/, "")) + "</b>");
+    else out.push(inline(line));
+  }
+  if (list) out.push("<ul>" + list.join("") + "</ul>");
+  return out.join("<br>").replace(/<br>(<ul>|<hr>)/g, "$1").replace(/(<\/ul>|<hr>)<br>/g, "$1");
+}
+function assistantMsg(text) { const d = el("div", "msg assistant md"); d.innerHTML = md(text); return d; }
+
+// ---------- settings dialog ----------
+async function loadSettings() {
+  settings = await api("/api/settings");
+  defaults = await api("/api/settings/defaults");
+  fillDialog(); await loadModels(settings.model); renderModelNode();
+}
+function fillDialog() {
+  $("baseUrl").value = settings.base_url; $("apiKey").value = settings.api_key;
+  $("temp").value = settings.temperature; $("tempVal").textContent = (+settings.temperature).toFixed(2);
+  $("steps").value = settings.max_steps; $("vision").checked = settings.vision; $("sys").value = settings.system_prompt;
+  const opt = [...$("preset").options].find(o => o.value === settings.base_url);
+  $("preset").value = opt ? opt.value : "custom";
+}
+async function loadModels(selected) {
+  const q = new URLSearchParams({ base_url: $("baseUrl").value, api_key: $("apiKey").value });
+  $("modelHint").textContent = "загрузка списка…";
+  const r = await api("/api/models?" + q);
+  for (const sel of [$("model"), $("tbModel")]) {
+    sel.innerHTML = "";
+    for (const m of r.models) sel.appendChild(new Option(m, m));
+    if (selected && !r.models.includes(selected)) sel.appendChild(new Option(selected + " (недоступна)", selected));
+    if (!r.models.length && !selected) sel.appendChild(new Option("нет моделей", ""));
+    sel.value = selected || r.models[0] || "";
+  }
+  const dm = $("drawingModel"), cur = settings.drawing_model || "";
+  dm.innerHTML = ""; dm.appendChild(new Option("как основная", ""));
+  for (const m of r.models.filter(m => !/embed/i.test(m))) dm.appendChild(new Option(m, m));
+  if (cur && !r.models.includes(cur)) dm.appendChild(new Option(cur + " (недоступна)", cur));
+  dm.value = cur;
+  $("modelHint").textContent = r.error ? (/token|401|api.?key/i.test(r.error)
+      ? "Сервер требует API-ключ: введите его ниже и обновите список."
+      : "Сервер ИИ не отвечает. Запустите LM Studio или Ollama и обновите список.") : `Доступно моделей: ${r.models.length}`;
+}
+async function saveSettings(patch) {
+  settings = await api("/api/settings", { method: "PUT", body: JSON.stringify(patch) });
+  renderModelNode();
+}
+function openDialog() { fillDialog(); loadModels(settings.model); $("dlgBack").classList.add("open"); }
+function closeDialog() { $("dlgBack").classList.remove("open"); }
+document.querySelectorAll("#dlg .tabs button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#dlg .tabs button, #dlg .page").forEach(x => x.classList.remove("on"));
+  b.classList.add("on"); $(b.dataset.page).classList.add("on");
+});
+$("temp").oninput = () => $("tempVal").textContent = (+$("temp").value).toFixed(2);
+$("sysReset").onclick = e => { e.preventDefault(); $("sys").value = defaults.system_prompt || ""; };
+$("dlgOk").onclick = async () => {
+  await saveSettings({ base_url: $("baseUrl").value.trim(), model: $("model").value, api_key: $("apiKey").value,
+    temperature: parseFloat($("temp").value), max_steps: parseInt($("steps").value) || 25,
+    vision: $("vision").checked, system_prompt: $("sys").value, drawing_model: $("drawingModel").value });
+  $("tbModel").value = settings.model; closeDialog();
+};
+$("dlgCancel").onclick = $("dlgX").onclick = closeDialog;
+$("dlgBack").onclick = e => { if (e.target === $("dlgBack")) closeDialog(); };
+$("preset").onchange = () => { if ($("preset").value !== "custom") { $("baseUrl").value = $("preset").value; loadModels(); } };
+$("baseUrl").onchange = () => loadModels();
+$("btnModels").onclick = () => loadModels($("model").value);
+$("tbModel").onchange = () => saveSettings({ model: $("tbModel").value });
+
+// ---------- browser panel ----------
+function leaf(text, cls, ic) { const d = el("div", "leaf" + (cls ? " " + cls : "")); if (ic) d.appendChild(ic); d.appendChild(el("span", null, text)); d.title = text; return d; }
+function renderModelNode() {
+  const n = $("trModel"); n.innerHTML = "";
+  const server = [...$("preset").options].find(o => o.value === settings.base_url);
+  n.appendChild(leaf(server ? server.text : settings.base_url, "muted"));
+  n.appendChild(leaf(settings.model || "модель не выбрана", "", icon("i-chip")));
+}
+async function refreshStatus() {
+  const chip = $("kchip"), node = $("trKompas"), docs = $("trDocs");
+  node.innerHTML = ""; docs.innerHTML = "";
+  try {
+    const r = await api("/api/status"); const s = r.status;
+    const ok = !r.error && s.ok !== false && s.kompas_running;
+    chip.innerHTML = ""; chip.appendChild(el("span", "dot " + (ok ? "ok" : "bad")));
+    chip.appendChild(el("span", null, ok ? "КОМПАС запущен" : "КОМПАС не запущен"));
+    node.appendChild(leaf(ok ? "Запущен" : (s.error || "Не запущен"), ok ? "" : "muted"));
+    if (ok) {
+      node.appendChild(leaf("Папка вывода: " + s.output_dir, "muted"));
+      if (!s.open_documents.length) docs.appendChild(leaf("нет открытых", "muted"));
+      s.open_documents.forEach(d => docs.appendChild(leaf(d.split("\\").pop(), d === s.active_document ? "" : "muted", icon("i-doc"))));
+    }
+  } catch (e) { chip.innerHTML = '<span class="dot bad"></span><span>интерфейс не отвечает</span>'; }
+}
+async function loadTools() {
+  const r = await api("/api/tools");
+  $("trToolsTitle").textContent = `Инструменты (${r.tools.length})`;
+  const n = $("trTools"); n.innerHTML = "";
+  r.tools.forEach(t => { const l = leaf(t.name, "", icon(toolIcon(t.name))); l.title = t.description; n.appendChild(l); });
+}
+document.querySelectorAll(".node > .row").forEach(r => r.onclick = () => r.parentElement.classList.toggle("open"));
+
+// ---------- viewport & timeline ----------
+function showInViewport(im, caption) {
+  const vp = $("viewport"); vp.innerHTML = "";
+  const img = el("img"); img.src = `data:${im.mime};base64,${im.data}`; vp.appendChild(img);
+  $("vpcaption").textContent = caption || "";
+}
+function toolIcon(name) {
+  return { sketch: "i-sketch", extrude: "i-extrude", revolve: "i-revolve", screenshot: "i-camera", new_part: "i-cube",
+    plate_with_holes: "i-extrude", build_part: "i-cube", model_info: "i-info", save: "i-save", export: "i-export", set_view: "i-iso",
+    new_fragment: "i-2d", draw_2d: "i-2d", diagnostics: "i-info", launch_kompas: "i-play" }[name] || "i-tool";
+}
+const tlItems = {};
+function tlAdd(id, name, args) {
+  $("tlempty")?.remove();
+  const it = el("div", "tli run"); it.title = name + " " + JSON.stringify(args);
+  it.appendChild(icon(args && args.cut ? "i-cut" : toolIcon(name), ""));
+  $("tl").appendChild(it); tlItems[id] = it; $("timeline").scrollLeft = 1e9;
+}
+function tlDone(id, state) { const it = tlItems[id]; if (it) { it.classList.remove("run"); if (state) it.classList.add(state); } }
+
+// ---------- attachments ----------
+let attachments = [];
+function renderTray(note) {
+  const tray = $("tray"); tray.innerHTML = "";
+  tray.classList.toggle("on", attachments.length > 0 || !!note);
+  if (note) tray.appendChild(el("div", "trayhint", note));
+  if (!attachments.length) return;
+  tray.appendChild(el("div", "trayhint", "Щелчок выбирает лист, двойной щелчок открывает крупно. Нужна модель с поддержкой изображений."));
+  attachments.forEach(a => {
+    const d = el("div", "att" + (a.sel ? " sel" : ""));
+    const img = el("img"); img.src = a.url; d.appendChild(img); d.appendChild(el("div", null, a.label));
+    d.onclick = () => { a.sel = !a.sel; renderTray(); };
+    d.ondblclick = () => window.open(a.url, "_blank");
+    tray.appendChild(d);
+  });
+  const review = el("button", null, "Разобрать чертёж"); review.type = "button";
+  review.title = "Прочитать размеры, проверить по правилам ЕСКД и показать их вам перед построением";
+  review.onclick = () => startReview((attachments.find(x => x.sel) || attachments[0]).url);
+  tray.appendChild(review);
+  const clear = el("button", null, "Убрать"); clear.type = "button";
+  clear.onclick = () => { attachments = []; renderTray(); };
+  tray.appendChild(clear);
+}
+async function uploadFile(file) {
+  renderTray("Загружаю " + file.name + "…");
+  const fd = new FormData(); fd.append("file", file);
+  try {
+    const r = await (await fetch("/api/upload", { method: "POST", body: fd })).json();
+    if (r.error) { renderTray("Ошибка: " + r.error); return; }
+    const many = r.pages.length > 1;
+    r.pages.forEach((url, i) => attachments.push({ url, sel: i === 0, label: many ? `лист ${i + 1}` : r.name }));
+    renderTray();
+  } catch (e) { renderTray("Ошибка загрузки: " + e); }
+}
+
+// ---------- chat ----------
+const pending = {};
+let aborter = null;
+function reasoningBlock(ev) {
+  const d = el("details", "tool reason");
+  const s = el("summary"); s.appendChild(icon("i-bulb"));
+  s.appendChild(el("span", null, `Ход рассуждений модели (${ev.seconds} с)`)); d.appendChild(s);
+  d.appendChild(el("pre", null, ev.text));
+  return d;
+}
+function setBusy(on) {
+  busy = on;
+  $("btnSend").textContent = on ? "Стоп" : "ОК";
+  $("btnSend").classList.toggle("stop", on);
+}
+function toolBlock(ev) {
+  const d = el("details", "tool");
+  const s = el("summary"); s.appendChild(icon(ev.args && ev.args.cut ? "i-cut" : toolIcon(ev.name)));
+  s.appendChild(el("span", "name", ev.name)); s.appendChild(el("span", "spin"));
+  d.appendChild(s); d.appendChild(el("pre", null, JSON.stringify(ev.args, null, 2)));
+  return d;
+}
+async function send(text) {
+  if (busy) return;
+  setBusy(true); aborter = new AbortController();
+  const images = attachments.filter(a => a.sel).map(a => a.url);
+  const um = add(el("div", "msg user", text));
+  if (images.length) {
+    const th = el("div", "thumbs"); images.forEach(u => { const im = el("img"); im.src = u; th.appendChild(im); });
+    um.appendChild(th); attachments = []; renderTray();
+  }
+  const thinking = add(el("div", "meta")); thinking.appendChild(el("span", "spin")); const tt = el("span", null, "модель думает…"); thinking.appendChild(tt);
+  try {
+    const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, images }), signal: aborter.signal });
+    const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "";
+    while (true) {
+      const { value, done } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i; while ((i = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 1);
+        if (line.trim()) handle(JSON.parse(line), thinking, tt);
+      }
+    }
+  } catch (e) {
+    add(el("div", "msg error", e.name === "AbortError" ? "Остановлено." : "Ошибка соединения: " + e));
+  }
+  thinking.remove(); setBusy(false); refreshStatus();
+}
+function stopGeneration() {
+  fetch("/api/stop", { method: "POST" });
+  if (aborter) aborter.abort();
+}
+function handle(ev, thinking, tt) {
+  if (ev.type === "thinking") { tt.textContent = `модель думает… шаг ${ev.step}`; log.appendChild(thinking); }
+  else if (ev.type === "progress") {
+    const what = ev.tool_calls ? "готовит вызов инструмента" : ev.content_chars ? "пишет ответ" : ev.reasoning_chars ? "рассуждает" : "читает запрос";
+    const toks = Math.round((ev.reasoning_chars + ev.content_chars) / 3.5);
+    tt.textContent = `шаг ${ev.step}: модель ${what}… ${ev.seconds} с` + (toks ? `, ~${toks} токенов` : "");
+  }
+  else if (ev.type === "reasoning") log.insertBefore(reasoningBlock(ev), thinking);
+  else if (ev.type === "assistant") log.insertBefore(assistantMsg(ev.text), thinking);
+  else if (ev.type === "tool_call") { pending[ev.id] = log.insertBefore(toolBlock(ev), thinking); tlAdd(ev.id, ev.name, ev.args); }
+  else if (ev.type === "tool_result") {
+    const d = pending[ev.id] || add(toolBlock({ name: ev.name, args: {} }));
+    d.querySelector(".spin")?.remove();
+    let warn = false; try { warn = !!JSON.parse(ev.text).warning; } catch (e) {}
+    if (ev.error) d.classList.add("err"); else if (warn) d.classList.add("warn");
+    d.querySelector("summary").appendChild(el("span", null, ev.error ? "— ошибка" : warn ? "— предупреждение" : ""));
+    d.appendChild(el("pre", null, ev.text));
+    for (const im of ev.images || []) {
+      const img = el("img"); img.src = `data:${im.mime};base64,${im.data}`; d.appendChild(img);
+      showInViewport(im, "Снимок после операции «" + ev.name + "»");
+    }
+    tlDone(ev.id, ev.error ? "err" : warn ? "warn" : "");
+  }
+  else if (ev.type === "error") log.insertBefore(el("div", "msg error", ev.text), thinking);
+  log.scrollTop = log.scrollHeight;
+}
+
+// ---------- drawing review ----------
+let rv = null, rvSource = null;
+const PROJ_FOR = { "главный": "главный", "сверху": "сверху", "слева": "слева" };
+
+function zoomable(src) { const im = el("img"); im.src = src; im.onclick = () => window.open(src, "_blank"); return im; }
+function figure(src, caption) { const f = el("figure"); f.appendChild(zoomable(src)); f.appendChild(el("figcaption", null, caption)); return f; }
+
+async function startReview(url, note = "", exclude = [], ai = false) {
+  if (!url) { add(el("div", "msg error", "Сначала приложите чертёж (кнопка с PDF) и выберите лист.")); return; }
+  rvSource = url; rv = null;
+  $("rvBack").classList.add("open"); $("rvAccept").disabled = true;
+  // a new drawing (or reading this one again) starts clean: nothing of the previous review stays
+  $("rvDims").innerHTML = ""; $("rvIssues").innerHTML = ""; $("rvFeatures").innerHTML = ""; $("rvQuestions").innerHTML = "";
+  $("rvResult").textContent = "ещё не строилось"; $("rvCompare").innerHTML = "";
+  const src = el("div", "cmp"); src.appendChild(figure(url, "Исходный лист")); $("rvCompare").appendChild(src);
+  await rvStream("/api/drawing/analyze", { image: url, note, exclude, ai }, "Начинаю разбор…", "Модель читает чертёж");
+}
+
+// Runs a streamed drawing request, showing progress in the stage line; ends with rv updated.
+async function rvStream(path, payload, startText, label) {
+  const stage = $("rvStage"); stage.innerHTML = ""; stage.appendChild(el("span", "spin"));
+  const st = el("span", null, startText); stage.appendChild(st);
+  try {
+    const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "";
+    while (true) {
+      const { value, done } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i; while ((i = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 1); if (!line.trim()) continue;
+        const ev = JSON.parse(line);
+        if (ev.type === "stage") st.textContent = ev.text;
+        else if (ev.type === "progress") st.textContent = `${label}… ${ev.seconds} с` + (ev.reasoning_chars + ev.content_chars ? `, ~${Math.round((ev.reasoning_chars + ev.content_chars) / 3.5)} токенов` : "");
+        else if (ev.type === "error") { stage.innerHTML = ""; stage.appendChild(el("div", "issue error", ev.text)); }
+        else if (ev.type === "analysis") {
+          // the same analysis re-planned keeps what the user typed; another one starts from its own
+          const same = rv && rv.id === ev.id;
+          rv = { ...(same ? rv : {}), ...ev, answers: same ? { ...(ev.answers || {}), ...(rv.answers || {}) } : (ev.answers || {}),
+                 projections: null, build: null };
+          stage.innerHTML = ""; renderReview();
+          // compared with the model's reading (a comment was written): the part is built right away,
+          // the remarks stay in front of the user next to the result
+          if (ev.crosscheck && !ev.crosscheck.error) setTimeout(checkReview, 0);
+        }
+      }
+    }
+  } catch (e) { stage.innerHTML = ""; stage.appendChild(el("div", "issue error", "Ошибка: " + e)); }
+}
+
+function rvPayload() {
+  return { id: rv.id, values: rv.values, dimensions: rv.reading.dimensions, views: rv.reading.views,
+           answers: rv.answers || {}, note: $("rvNote").value.trim() };
+}
+
+function renderReview() {
+  const R = rv.reading;
+  $("rvTitle").textContent = R.title || "";
+  // drawing views next to the model's projections
+  const cmp = $("rvCompare"); cmp.innerHTML = "";
+  const names = {}; (R.views || []).forEach(v => names[v.image] = v.name);
+  rv.views.forEach((url, i) => {
+    const name = names[i + 1] || `вид ${i + 1}`;
+    const row = el("div", "cmp");
+    const fig = figure(url, "Чертёж:");
+    // the model may name a view wrongly — the user picks the right one
+    const sel = el("select");
+    for (const n of ["главный", "сверху", "слева", "справа", "снизу", "сзади", "разрез", "другое"]) sel.appendChild(new Option(n, n));
+    sel.appendChild(new Option("исключить из расчёта", "исключить"));
+    sel.value = names[i + 1] || "другое";
+    sel.title = "«Исключить из расчёта»: картинка и размеры с неё не учитываются (таблицы, штамп, лишние куски листа)";
+    sel.onchange = () => {
+      R.views = (R.views || []).filter(v => v.image !== i + 1).concat([{ image: i + 1, name: sel.value }]);
+      $("rvAccept").disabled = true;
+      renderReview();
+    };
+    fig.querySelector("figcaption").appendChild(sel);
+    if (sel.value === "исключить") { fig.classList.add("excluded"); fig.querySelector("img").style.opacity = "0.35"; }
+    row.appendChild(fig);
+    const proj = rv.projections && rv.projections[PROJ_FOR[name]];
+    if (proj) row.appendChild(figure(`data:${proj.mime};base64,${proj.data}`, `Модель: ${name}`));
+    else row.appendChild(el("div", "hint", rv.projections ? "У модели нет такого вида" : "Проекция появится после проверки"));
+    cmp.appendChild(row);
+  });
+  if (rv.construction) {
+    const f = figure(rv.construction, "Вид слева, построенный по главному виду и виду сверху методом переноса (линия 45°)");
+    f.style.gridColumn = "1 / span 2";
+    const row = el("div", "cmp"); row.appendChild(f); cmp.appendChild(row);
+  }
+  if (rv.projections) {
+    const row = el("div", "cmp");
+    for (const n of ["слева", "изометрия"]) {
+      const p = rv.projections[n];
+      if (p && !(R.views || []).some(v => v.name === n)) row.appendChild(figure(`data:${p.mime};base64,${p.data}`, `Модель: ${n} (на чертеже нет — достроено)`));
+    }
+    if (row.children.length) cmp.appendChild(row);
+  }
+  // dimension fields
+  const flagged = new Set((rv.issues || []).flatMap(i => i.dims || []));
+  const excluded = new Set((R.views || []).filter(v => v.name === "исключить").map(v => v.image));
+  const tb = $("rvDims"); tb.innerHTML = "";
+  for (const d of R.dimensions || []) {
+    const vm = /(?:вид|изображени\w*|image)\s*(\d+)/i.exec(d.view || "");
+    const off = vm && excluded.has(+vm[1]);
+    const tr = el("tr", off ? "off" : flagged.has(d.id) ? "bad" : (d.confidence < 0.7 ? "low" : ""));
+    if (off) { tr.style.opacity = "0.4"; tr.title = "С исключённого вида: в расчёте не участвует"; }
+    tr.appendChild(el("td", null, d.id));
+    const tdm = el("td"); const mi = el("input"); mi.value = d.meaning || ""; mi.style.width = "100%";
+    mi.title = "Что задаёт размер — можно исправить"; mi.oninput = () => { d.meaning = mi.value; $("rvAccept").disabled = true; };
+    tdm.appendChild(mi);
+    const ax = el("select"); ax.style.marginTop = "2px";
+    for (const [v, t] of [["length", "длина X"], ["width", "ширина Y"], ["height", "высота Z"], ["diameter", "диаметр"], ["radius", "радиус"], ["other", "другое"]])
+      ax.appendChild(new Option(t, v));
+    ax.value = d.axis || "other"; ax.onchange = () => { d.axis = ax.value; };
+    const ov = el("label", "hint"); const cb = el("input"); cb.type = "checkbox"; cb.checked = !!d.overall; cb.style.width = "auto";
+    cb.onchange = () => { d.overall = cb.checked; }; ov.appendChild(cb); ov.appendChild(document.createTextNode(" габарит"));
+    const row2 = el("div"); row2.style.display = "flex"; row2.style.gap = "6px"; row2.style.alignItems = "center";
+    row2.appendChild(ax); row2.appendChild(ov); tdm.appendChild(row2);
+    tr.appendChild(tdm);
+    tr.appendChild(el("td", null, d.view));
+    const td = el("td"); const inp = el("input"); inp.type = "number"; inp.step = "any"; inp.value = rv.values[d.id];
+    inp.oninput = () => { rv.values[d.id] = parseFloat(inp.value); $("rvAccept").disabled = true; };
+    td.appendChild(inp);
+    if (d.value !== undefined && rv.values[d.id] !== d.value) td.appendChild(el("div", "orig", `прочитано: ${d.value}`));
+    tr.appendChild(td); tb.appendChild(tr);
+  }
+  const addTr = el("tr"); const addTd = el("td"); addTd.colSpan = 4;
+  const addBtn = el("button", "btn", "+ Добавить размер, который модель пропустила"); addBtn.type = "button";
+  addBtn.onclick = () => {
+    const ids = (R.dimensions || []).map(d => +String(d.id).replace(/\D/g, "") || 0);
+    const id = "d" + (Math.max(0, ...ids) + 1);
+    R.dimensions.push({ id, value: undefined, view: "вручную", meaning: "", axis: "other", overall: false, confidence: 1 });
+    rv.values[id] = NaN; renderReview();
+    const inputs = $("rvDims").querySelectorAll("tr:nth-last-child(2) input"); if (inputs[0]) inputs[0].focus();
+  };
+  addTd.appendChild(addBtn); addTr.appendChild(addTd); tb.appendChild(addTr);
+  // issues
+  const iss = $("rvIssues"); iss.innerHTML = "";
+  if (!(rv.issues || []).length) iss.appendChild(el("div", "issue ok", "Замечаний нет: размеры согласованы между видами, план сходится с габаритами."));
+  for (const i of rv.issues || []) iss.appendChild(el("div", "issue " + i.level, i.text));
+  const fl = $("rvFeatures"); fl.innerHTML = "";
+  for (const f of (rv.notes && rv.notes.length ? rv.notes : R.features || [])) fl.appendChild(el("li", null, f));
+  // the language model's own reading (when a comment asked for the cross-check)
+  if (rv.crosscheck && (rv.crosscheck.features || []).length) {
+    fl.appendChild(el("li", null, `Модель ИИ (${rv.crosscheck.model || ""}) видит деталь так:`));
+    for (const f of rv.crosscheck.features) { const li = el("li", null, "— " + f); li.style.opacity = "0.85"; fl.appendChild(li); }
+  }
+  // questions: only what the pictures could not settle, with the program's guess filled in
+  const qs = $("rvQuestions"); qs.innerHTML = "";
+  rv.answers = rv.answers || {};
+  if (!(rv.questions || []).length && !Object.keys(rv.answers).length)
+    qs.appendChild(el("div", "hint", "Вопросов нет: всё нужное видно на чертеже."));
+  for (const q of rv.questions || []) {
+    const row = el("div", "issue"); row.appendChild(el("div", null, q.text));
+    const inp = el("input"); inp.type = "number"; inp.step = "any"; inp.style.width = "90px"; inp.style.marginTop = "4px";
+    inp.value = rv.answers[q.id] ?? q.default;
+    inp.oninput = () => { rv.answers[q.id] = parseFloat(inp.value); $("rvAccept").disabled = true; };
+    if (rv.answers[q.id] === undefined) rv.answers[q.id] = q.default;
+    row.appendChild(inp); row.appendChild(document.createTextNode(" " + (q.unit || "")));
+    if (q.region && rv.views[q.region.image - 1]) row.appendChild(regionPreview(rv.views[q.region.image - 1], q.region));
+    qs.appendChild(row);
+  }
+  // build result
+  const b = rv.build;
+  if (b) {
+    $("rvResult").textContent = b.error ? "Ошибка построения: " + b.error :
+      `Операций выполнено ${b.operations_done} из ${b.operations_total}. Объём ${b.volume_mm3} мм³, масса ${(b.mass_g / 1000).toFixed(3)} кг (сталь)` +
+      (b.failed ? `. Остановилось на операции ${b.failed.n}: ${b.failed.error}` : "") +
+      ((b.skipped || []).length ? `. Пропущено операций: ${b.skipped.length} (${b.skipped.map(s => `${s.n}: ${s.comment || s.op}`).join("; ")})` : "") +
+      ((b.invalid || []).length ? `. С ошибкой в КОМПАСе: ${b.invalid.map(s => `${s.n}: ${s.comment || s.op}`).join("; ")}` : "") +
+      ((b.results || []).filter(r => r.warning).map(r => `. Операция ${r.n}: ${r.warning}`).join(""));
+  }
+}
+
+// where a question is about: the whole view with the area marked, and the area enlarged next to it
+function regionPreview(url, region) {
+  const box = el("div"); box.style.display = "flex"; box.style.gap = "8px"; box.style.marginTop = "6px"; box.style.flexWrap = "wrap";
+  const whole = el("canvas"), zoom = el("canvas");
+  for (const c of [whole, zoom]) { c.style.border = "1px solid var(--border, #ccc)"; c.style.background = "#fff"; c.style.cursor = "zoom-in"; }
+  whole.title = "Весь вид: место вопроса отмечено красным"; zoom.title = "Это место крупно";
+  box.appendChild(whole); box.appendChild(zoom);
+  const img = new Image();
+  img.onload = () => {
+    const W = img.naturalWidth, H = img.naturalHeight;
+    const pts = region.polygons.flat();
+    let x0 = Math.min(...pts.map(p => p[0])) * W, x1 = Math.max(...pts.map(p => p[0])) * W;
+    let y0 = Math.min(...pts.map(p => p[1])) * H, y1 = Math.max(...pts.map(p => p[1])) * H;
+    const draw = (c, sx, sy, sw, sh, maxW, maxH) => {
+      const k = Math.min(maxW / sw, maxH / sh);
+      c.width = Math.max(1, Math.round(sw * k)); c.height = Math.max(1, Math.round(sh * k));
+      const g = c.getContext("2d");
+      g.drawImage(img, sx, sy, sw, sh, 0, 0, c.width, c.height);
+      g.fillStyle = "rgba(230,40,40,0.28)"; g.strokeStyle = "#e02020"; g.lineWidth = 2;
+      for (const poly of region.polygons) {
+        g.beginPath();
+        poly.forEach(([fx, fy], i) => { const X = (fx * W - sx) * k, Y = (fy * H - sy) * k; i ? g.lineTo(X, Y) : g.moveTo(X, Y); });
+        g.closePath(); g.fill(); g.stroke();
+      }
+      return k;
+    };
+    const k = draw(whole, 0, 0, W, H, 220, 220);
+    // a frame on the overview showing what the enlarged picture covers
+    const pad = Math.max(0.6 * Math.max(x1 - x0, y1 - y0), 0.08 * Math.max(W, H));
+    const zx0 = Math.max(0, x0 - pad), zy0 = Math.max(0, y0 - pad);
+    const zx1 = Math.min(W, x1 + pad), zy1 = Math.min(H, y1 + pad);
+    const g = whole.getContext("2d"); g.strokeStyle = "#2060e0"; g.lineWidth = 1.5;
+    g.strokeRect(zx0 * k, zy0 * k, (zx1 - zx0) * k, (zy1 - zy0) * k);
+    draw(zoom, zx0, zy0, zx1 - zx0, zy1 - zy0, 320, 220);
+  };
+  img.src = url;
+  for (const c of [whole, zoom]) c.onclick = () => window.open(url, "_blank");
+  return box;
+}
+
+async function checkReview() {
+  if (!rv) return;
+  $("rvCheck").disabled = true; $("rvResult").textContent = "Строю деталь и снимаю проекции…";
+  try {
+    const r = await api("/api/drawing/preview", { method: "POST", body: JSON.stringify(rvPayload()) });
+    if (r.error) { $("rvResult").textContent = r.error; return; }
+    Object.assign(rv, r); renderReview();
+    const ok = r.build && !r.build.error && !r.build.failed && r.build.volume_mm3 > 0
+      && !(r.issues || []).some(i => i.level === "error");
+    $("rvAccept").disabled = !ok;
+    if (ok && r.projections && r.projections["изометрия"]) showInViewport(r.projections["изометрия"], "Деталь по чертежу");
+  } finally { $("rvCheck").disabled = false; refreshStatus(); }
+}
+
+async function acceptReview() {
+  const r = await api("/api/drawing/accept", { method: "POST", body: JSON.stringify({ id: rv.id }) });
+  $("rvBack").classList.remove("open");
+  add(assistantMsg(r.summary || "Деталь принята."));
+}
+
+$("rvX").onclick = $("rvCancel").onclick = () => $("rvBack").classList.remove("open");
+$("rvCheck").onclick = checkReview;
+$("rvAccept").onclick = acceptReview;
+// re-reading keeps the views the user excluded out of the model's sight
+$("rvReread").onclick = () => startReview(rvSource, $("rvNote").value.trim(),
+  ((rv && rv.reading.views) || []).filter(v => v.name === "исключить").map(v => v.image));
+// the language model reads the whole sheet too (even with no comment), then the part is built
+$("rvAi").onclick = () => startReview(rvSource, $("rvNote").value.trim(),
+  ((rv && rv.reading.views) || []).filter(v => v.name === "исключить").map(v => v.image), true);
+$("tbReview").onclick = () => {
+  const a = attachments.find(x => x.sel) || attachments[0];
+  if (a) startReview(a.url); else { $("file").click(); add(assistantMsg("Выберите чертёж — после загрузки нажмите «Разбор» ещё раз.")); }
+};
+
+// ---------- commands ----------
+async function newChat() { await api("/api/reset", { method: "POST" }); log.innerHTML = ""; add(assistantMsg("Опишите деталь: размеры, отверстия, что сохранить или экспортировать. Можно приложить чертёж в PDF.")); }
+async function shot(view) {
+  if (view) { const v = await callTool("set_view", { view }); if (v.error) { add(el("div", "msg error", v.text)); return; } }
+  const r = await callTool("screenshot", { iso: false });
+  if (r.error) add(el("div", "msg error", r.text)); else if (r.images.length) showInViewport(r.images[0], view ? "Вид: " + view : "Снимок");
+}
+async function fileCmd(kind) {
+  const name = prompt(kind === "save" ? "Имя файла (.m3d / .frw / .cdw). Без пути — в папку вывода:" :
+    "Имя файла для экспорта (step, stl, igs, dxf, pdf, png…). Без пути — в папку вывода:", kind === "save" ? "деталь.m3d" : "деталь.step");
+  if (!name) return;
+  const r = await callTool(kind, { path: name });
+  add(r.error ? el("div", "msg error", r.text) : assistantMsg((kind === "save" ? "Сохранено: " : "Экспортировано: ") + "`" + JSON.parse(r.text)[kind === "save" ? "saved" : "exported"] + "`"));
+}
+// The button is OK while idle and Stop while the model works (no form validation in the way).
+function submitText() { const t = $("text").value.trim(); if (t) { $("text").value = ""; send(t); } }
+$("ask").addEventListener("submit", e => e.preventDefault());
+$("btnSend").addEventListener("click", () => busy ? stopGeneration() : submitText());
+$("text").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!busy) submitText(); } });
+for (const id of ["abNew", "tbNew", "pNew"]) $(id).onclick = newChat;
+for (const id of ["abAttach", "tbAttach", "btnAttach"]) $(id).onclick = () => $("file").click();
+for (const id of ["abSettings", "tbSettings"]) $(id).onclick = openDialog;
+$("file").onchange = () => { for (const f of $("file").files) uploadFile(f); $("file").value = ""; };
+$("tbRefresh").onclick = refreshStatus;
+$("tbLaunch").onclick = async () => { await callTool("launch_kompas"); refreshStatus(); };
+$("tbShot").onclick = () => shot();
+document.querySelectorAll("[data-view]").forEach(b => b.onclick = () => shot(b.dataset.view));
+$("tbSave").onclick = () => fileCmd("save");
+$("tbExport").onclick = () => fileCmd("export");
+$("tbExamples").onclick = e => { const m = $("examplesMenu"); m.style.left = e.currentTarget.getBoundingClientRect().left + "px"; m.classList.toggle("open"); e.stopPropagation(); };
+document.addEventListener("click", () => $("examplesMenu").classList.remove("open"));
+document.querySelectorAll("#examplesMenu button").forEach(b => b.onclick = () => { $("text").value = b.textContent; $("text").focus(); });
+document.addEventListener("dragover", e => { e.preventDefault(); document.body.classList.add("drag"); });
+document.addEventListener("dragleave", e => { if (!e.relatedTarget) document.body.classList.remove("drag"); });
+document.addEventListener("drop", e => { e.preventDefault(); document.body.classList.remove("drag"); for (const f of e.dataTransfer.files) uploadFile(f); });
+
+newChat(); loadSettings(); refreshStatus(); loadTools();
+</script>
+</body>
+</html>

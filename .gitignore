@@ -1,0 +1,10 @@
+# built installers and their staging
+dist/
+installer/build/
+# Python caches
+__pycache__/
+*.pyc
+# local copies of the app's logs and the user's own settings
+logs_copy/
+ui/settings.json
+*.log
