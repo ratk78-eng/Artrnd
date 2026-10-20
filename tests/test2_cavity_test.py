@@ -38,6 +38,7 @@ if "--build" in sys.argv:
     k = Kompas()
     k.connect(launch=False)
     r = k.build_part(ops, "test2", True, None)
+    k.close_current()   # test parts are closed without saving
     vol = r.get("volume_mm3") or 0
     print("built", r.get("operations_done"), "/", len(ops), "volume", vol, "size", r.get("size_mm"))
     ok = r.get("failed") is None and abs(vol - 56515.36) <= 0.005 * 56515.36 and __import__("kcheck").check(r)

@@ -125,13 +125,17 @@ async def revolve(sketch_id: int, angle: float = 360.0, cut: bool = False) -> di
     "symmetric, angle (для revolve, нужна ось style=3)}]. Координаты примитивов: XY → (X, Y), "
     "XZ → (X, Z), YZ → (Y, Z); нормали +Z, +Y, +X. Первая операция — основное тело, дальше бобышки "
     "и вырезы. expected_volume_mm3 — твой расчёт объёма, сервер сверит. Возвращает итог по каждой "
-    "операции (warning = операция ничего не изменила), объём, массу и снимок. " + SHAPES_DOC))
+    "операции (warning = операция ничего не изменила), объём, массу и снимок. close=true — после "
+    "замера закрыть деталь без сохранения. " + SHAPES_DOC))
 async def build_part(operations: list[dict[str, Any]], name: str | None = None, new: bool = True,
                      expected_volume_mm3: float | None = None, screenshot: bool = True,
-                     keep_going: bool = False) -> list:
+                     keep_going: bool = False, close: bool = False) -> list:
+    # close: the part is closed without saving once measured (test builds leave nothing open)
     def go():
         res = _k.build_part(operations, name, new, expected_volume_mm3, keep_going)
         shot = _k.screenshot(_out("build_part.png"), True) if screenshot else None
+        if close:
+            _k.close_current()
         return res, shot
     res, shot = await _run(go)
     out: list = [json.dumps(res, ensure_ascii=False, indent=1)]

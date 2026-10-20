@@ -79,6 +79,7 @@ if "--build" in sys.argv:
         if per > 20 and 2 * fd.GetArea(0x1) / per < 0.01:
             slivers += 1
     print("slivers", slivers)
+    k.k7.ActiveDocument.Close(0)   # the test part, without saving
     ok = ok and slivers == 0
 print("PDF VECTOR TEST", "PASSED" if ok else "FAILED")
 shutil.rmtree(folder, ignore_errors=True)

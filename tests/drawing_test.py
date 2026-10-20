@@ -84,6 +84,7 @@ if "--build" in sys.argv:
     k.connect()
     ops = drawing.resolve_plan(READING["plan"]["operations"], values)
     res = k.build_part(ops, name="drawing_test")
+    k.close_current()   # test parts are closed without saving
     print(res)
     # one pocket here (the right one) — reference part13.py has two
     pocket = (math.pi * 12 ** 2 / 2 + 24 * 9) * 15   # floor at Z 5

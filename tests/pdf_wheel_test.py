@@ -34,7 +34,7 @@ if "--build" in sys.argv:
     import json
     import urllib.request
     import kcheck
-    body = json.dumps({"name": "build_part", "args": {"operations": ops, "name": "wheel", "screenshot": False,
+    body = json.dumps({"name": "build_part", "args": {"operations": ops, "name": "wheel", "screenshot": False, "close": True,
                                                       "keep_going": True}}).encode()
     r = json.load(urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:8765/api/tool", body,
                                                                 {"Content-Type": "application/json"}), timeout=900))

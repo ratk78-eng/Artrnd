@@ -38,7 +38,7 @@ assert ops[0]["op"] == "revolve" and any("контура главного вид
 assert any(n.startswith("Паз") for n in notes), "keyway not found"
 ok = True
 if "--build" in sys.argv:
-    body = json.dumps({"name": "build_part", "args": {"operations": ops, "name": "rack", "screenshot": False}}).encode()
+    body = json.dumps({"name": "build_part", "args": {"operations": ops, "name": "rack", "screenshot": False, "close": True}}).encode()
     r = json.load(urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:8765/api/tool", body,
                                                                 {"Content-Type": "application/json"}), timeout=900))
     res = json.loads(r["text"])

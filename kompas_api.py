@@ -105,7 +105,7 @@ class Kompas:
         docs = self.k7.Documents
         for i in range(docs.Count):
             doc = docs.Item(i)
-            if int(doc.Reference) == ref:
+            if doc is not None and int(doc.Reference) == ref:
                 return doc
         return None
 
@@ -151,6 +151,19 @@ class Kompas:
             p.Update()
         self.sketches.clear()
         return {"created": True, "name": name}
+
+    def close_current(self) -> bool:
+        """Closes the document this session made, without saving (a test build)."""
+        doc7 = self._activate()
+        if doc7 is not None:
+            doc7.Close(0)   # kdDoNotSaveChanges
+        elif self.cur is not None and self._alive_ref(self.cur):
+            self.cur.close()   # API5: closes without asking
+        else:
+            return False
+        self.cur, self.cur_kind = None, None
+        self.sketches.clear()
+        return True
 
     def _plane(self, plane: str, offset: float):
         part = self.part()

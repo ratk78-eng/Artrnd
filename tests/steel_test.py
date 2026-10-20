@@ -42,6 +42,7 @@ for f in files:
         print("   !", i["text"])
     if k:
         r = k.build_part(res["operations"], f, True, None)
+        k.close_current()   # test parts are closed without saving
         vol = r.get("volume_mm3") or 0
         m_kg = vol * steel.STEEL_DENSITY
         spec = st["spec"].get("mass_kg")

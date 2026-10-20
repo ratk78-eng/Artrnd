@@ -80,7 +80,9 @@ shapes = [{"type": "line", "x1": r, "y1": 0, "x2": 40 - r, "y2": 0},
           {"type": "arc", "x": r, "y": 20 - r, "r": r, "a1": 90, "a2": 180, "x1": r, "y1": 20, "x2": 0, "y2": 20 - r},
           {"type": "line", "x1": 0, "y1": 20 - r, "x2": 0, "y2": r},
           {"type": "arc", "x": r, "y": r, "r": r, "a1": 180, "a2": 270, "x1": 0, "y1": r, "x2": r, "y2": 0}]
+k.close_current()   # test parts are closed without saving
 res = k.build_part([{"op": "extrude", "plane": "XY", "depth": 10, "shapes": shapes}], "constraints_test")
+k.close_current()
 c = res.get("sketch_constraints", {})
 print(c, res["volume_mm3"])
 assert c.get("совпадение") == 8 and c.get("касание") == 8 and c.get("горизонталь") == 2 and c.get("вертикаль") == 2, c

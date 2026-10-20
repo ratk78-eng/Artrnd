@@ -58,6 +58,7 @@ if "--build" in sys.argv:
     k = Kompas()
     k.connect(launch=False)
     r = k.build_part(a["reading"]["plan"]["operations"], "Втулка", True, None)
+    k.close_current()   # test parts are closed without saving
     vol = r.get("volume_mm3") or 0
     print("built", r.get("operations_done"), "volume", vol, "size", r.get("size_mm"), "failed", r.get("failed"))
     ok = r.get("failed") is None and 2718.6 * 0.95 <= vol <= 2718.6 * 1.10 and abs(r["size_mm"][0] - 41.56) < 0.05 \
