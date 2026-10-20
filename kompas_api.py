@@ -299,7 +299,7 @@ class Kompas:
         except Exception:  # noqa: BLE001
             return None
 
-    def loft(self, plane: str, sections: list, cut: bool = False) -> dict:
+    def loft(self, plane: str, sections: list, cut: bool = False, auto_path: bool = False) -> dict:
         """Operation «по сечениям» through sketches on parallel planes: sections = [(offset, shapes)]
         in the plane's natural coordinates (a helical gear: the tooth outline turned a little more on
         each plane). The sections must have their pieces in the same order."""
@@ -312,9 +312,10 @@ class Kompas:
             kind = o3d_cutLoft if cut else (o3d_bossLoft if self._has_body() else o3d_baseLoft)
             ent = part.NewEntity(kind)
             ld = ent.GetDefinition()
-            # autoPath off: piece k of a section goes to piece k of the next — with it on, KOMPAS paired
-            # the gear's tooth outlines crosswise and the body came out torn
-            ld.SetLoftParam(False, False, False)
+            # autoPath off by default: piece k of a section goes to piece k of the next — with it on,
+            # KOMPAS paired a whole gear's outline crosswise and the body came out torn; a short
+            # symmetric contour (a bevel gear's tooth space) needs it on instead (op "auto_path")
+            ld.SetLoftParam(False, False, bool(auto_path))
             arr = ld.Sketchs()
             for sid in sids:
                 arr.Add(self._get_sketch(sid))
@@ -439,12 +440,12 @@ class Kompas:
                 if isinstance(op, dict) and kind == "loft":
                     secs = [(float(s.get("offset", 0)), clean_shapes(s["shapes"])) for s in op.get("sections") or []]
                     try:
-                        r = self.loft(op.get("plane", "XY"), secs, bool(op.get("cut")))
+                        r = self.loft(op.get("plane", "XY"), secs, bool(op.get("cut")), bool(op.get("auto_path")))
                         self._drop_if_invalid("по сечениям")
                     except KompasError:
                         # the same with every arc as a fine polyline (KOMPAS sometimes cannot match arcs)
                         flat = [(o, arcs_to_lines(sh) or sh) for o, sh in secs]
-                        r = self.loft(op.get("plane", "XY"), flat, bool(op.get("cut")))
+                        r = self.loft(op.get("plane", "XY"), flat, bool(op.get("cut")), bool(op.get("auto_path")))
                         self._drop_if_invalid("по сечениям (дуги ломаной)")
                         r["warning"] = "дуги сечений заменены ломаной с шагом 2°"
                     results.append({"n": i, "op": kind, "volume_change_mm3": r["volume_change_mm3"],

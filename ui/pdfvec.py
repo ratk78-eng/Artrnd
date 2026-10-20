@@ -285,8 +285,8 @@ class Font:
         self.two = d.get("Subtype") == "Type0"
         self.map = _cmap(pdf.stream(d["ToUnicode"])) if "ToUnicode" in d else {}
         if not self.map and "Symbol_A" in str(d.get("BaseFont", "")):
-            # KOMPAS's sign font: «G» is its diameter sign
-            self.map = {71: "Ø"}
+            # KOMPAS's sign font: «G» is its diameter sign, «E» its degree sign
+            self.map = {71: "Ø", 69: "°"}
         self.widths: dict[int, float] = {}
         self.dw = 1000.0 if self.two else 500.0
         if self.two:
@@ -377,6 +377,10 @@ def read_page(pdf: PDF, page: dict) -> dict:
             if run is not None:
                 run["text"] += text
                 run["end"] = end
+            elif text:
+                # KOMPAS writes every letter — the spaces too — in a text block of its own: a space
+                # is kept as a text of its own for _join_runs to put between the words
+                texts.append({"text": " ", "x": x, "y": y, "size": size, "angle": ang, "end": end, "space": True})
             return
         if run is not None and abs(run["angle"] - ang) < 0.05:
             # along the line from the previous end, at most about a letter away and not far off the baseline
@@ -593,6 +597,10 @@ def _diameter_signs(strokes: list, texts: list) -> list:
 def _join_runs(texts: list) -> list:
     """«3 отв.» and «Ø14 -0,43» are drawn as separate strings with the sign between them: strings on
     one line, a short gap apart, are one text."""
+    # KOMPAS's PDF puts every letter (and every space) in a text block of its own, its letter widths
+    # a little off: letters are joined without a gap («10», not «1 0»), words by the spaces written
+    letterwise = sum(len(t["text"].strip()) <= 1 for t in texts) > 0.6 * max(1, len(texts))
+    lo = -0.45 if letterwise else -0.3
     out: list = []
     for t in texts:
         prev = next((p for p in reversed(out[-6:]) if abs(p["angle"] - t["angle"]) < 0.05), None)
@@ -600,13 +608,19 @@ def _join_runs(texts: list) -> list:
             along, across = _local(prev, t["x"], t["y"])
             e_along, _ = _local(prev, *prev["end"])
             gap = along - e_along
-            if -0.3 * prev["size"] <= gap <= 0.9 * prev["size"] and abs(across) <= 0.3 * prev["size"]:
-                # KOMPAS's PDF puts every letter in a text block of its own: letters a letter's
-                # spacing apart are one word («10», not «1 0»)
-                sep = " " if gap > 0.25 * prev["size"] else ""
-                prev["text"] = prev["text"].rstrip() + sep + t["text"].lstrip()
+            if lo * prev["size"] <= gap <= 0.9 * prev["size"] and abs(across) <= 0.3 * prev["size"]:
+                if t.get("space"):
+                    if not prev["text"].endswith(" "):
+                        prev["text"] += " "
+                    prev["end"] = t["end"]
+                    continue
+                base = prev["text"] if prev["text"].endswith(" ") else prev["text"].rstrip()
+                sep = "" if base.endswith(" ") or gap <= (0.6 if letterwise else 0.25) * prev["size"] else " "
+                prev["text"] = base + sep + t["text"].lstrip()
                 prev["end"] = t.get("end", prev["end"])
                 continue
+        if t.get("space"):
+            continue
         out.append(t)
     return out
 
@@ -833,6 +847,59 @@ def gear_table(pdf_path: str, page_no: int = 0) -> dict | None:
                 out[key] = float(m.group(1).replace(",", "."))
                 break
     return out if "m" in out and "z" in out else None
+
+
+BEVEL_ROWS = (("mn", r"^средн\w*\s+нормальн\w*\s+модул"), ("z", r"^число\s+зуб"), ("type", r"^тип\s+зуба"),
+              ("form", r"^осев\w*\s+форма"), ("beta", r"^(средн\w*\s+)?угол\s+наклона"),
+              ("hand", r"^направлени\w*\s+лини"), ("x", r"^коэффициент\s+смещени"),
+              ("xt", r"^коэффициент\s+изменени"), ("delta", r"^угол\s+делительн\w*\s+конуса"),
+              ("d0", r"^номинальн\w*\s+диаметр"), ("sigma", r"^межосев\w*\s+угол"),
+              ("mte", r"^внешн\w*\s+окружн\w*\s+модул"), ("delta_f", r"^угол\s+конуса\s+впадин"),
+              ("Re", r"^внешн\w*\s+конусн\w*\s+расстояни"), ("R", r"^средн\w*\s+конусн\w*\s+расстояни"),
+              ("dm", r"^средн\w*\s+делительн\w*\s+диаметр"), ("he", r"^внешн\w*\s+высот\w*\s+зуба"))
+
+
+def _angle(s: str) -> float | None:
+    """«40°04'08"» / «35°» / «35» → degrees."""
+    m = re.match(r"^\s*([+-]?\d+(?:[.,]\d+)?)\s*°?\s*(?:(\d+)\s*['′])?\s*(?:(\d+(?:[.,]\d+)?)\s*[\"″])?", s)
+    if not m:
+        return None
+    v = float(m.group(1).replace(",", "."))
+    return v + (int(m.group(2)) / 60 if m.group(2) else 0) + (float(m.group(3).replace(",", ".")) / 3600 if m.group(3) else 0)
+
+
+def bevel_table(pdf_path: str, page_no: int = 0) -> dict | None:
+    """A bevel gear's parameter table (ГОСТ 2.405): mean normal module, teeth, tooth type (straight /
+    circular), mean spiral angle and hand, pitch and root cone angles, cutter diameter, outer
+    transverse module, cone distances, outer tooth depth. None when the sheet has none."""
+    pdf = PDF(pdf_path)
+    page = read_page(pdf, pdf.pages()[page_no])
+    texts = [t for t in page["texts"] if t["text"].strip()]
+    out: dict = {}
+    for key, pat in BEVEL_ROWS:
+        label = next((t for t in texts if re.search(pat, t["text"].strip(), re.I) and abs(t["angle"]) < 0.1), None)
+        if label is None:
+            continue
+        row = [t for t in texts if t is not label and t["x"] > label["x"] + 2 * label["size"]
+               and abs(t["y"] - label["y"]) < 0.8 * label["size"] and abs(t["angle"]) < 0.1]
+        if not row:
+            continue
+        s = max(row, key=lambda t: t["x"])["text"].strip()   # the value column is the rightmost
+        if key == "hand":
+            out[key] = "right" if re.search(r"прав", s, re.I) else ("left" if re.search(r"лев", s, re.I) else None)
+        elif key == "type":
+            out[key] = "circular" if re.search(r"кругов", s, re.I) else ("straight" if re.search(r"прям", s, re.I) else s)
+        elif key == "form":
+            out[key] = {"I": 1, "1": 1, "II": 2, "2": 2, "III": 3, "3": 3}.get(s.upper())
+        elif key in ("beta", "delta", "delta_f", "sigma"):
+            out[key] = _angle(s)
+        else:
+            m = re.match(r"^([+-]?\d+(?:[.,]\d+)?)", s)
+            if m:
+                out[key] = float(m.group(1).replace(",", "."))
+    if not ("z" in out and "delta" in out and ("mn" in out or "mte" in out)):
+        return None
+    return out
 
 
 def _sheet_scale(texts: list[dict]) -> float:

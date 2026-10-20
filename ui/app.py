@@ -546,7 +546,14 @@ def _vector_pdf(pdf: str, folder: str) -> bool:
             meta = json.load(fh)
         if not meta.get("views") and not meta.get("steel"):
             return False
-        gear = pdfvec.gear_table(pdf)
+        bev = pdfvec.bevel_table(pdf)
+        if bev:
+            # a bevel gear's table (ГОСТ 2.405): its teeth are cut by it
+            meta["bevel"] = bev
+            with open(os.path.join(folder, "vector.json"), "w", encoding="utf-8") as fh:
+                json.dump(meta, fh, ensure_ascii=False)
+            info["bevel"] = bev
+        gear = None if bev else pdfvec.gear_table(pdf)
         if gear:
             # a gear wheel's table (module, number of teeth, helix angle…): the teeth are built from it
             meta["gear"] = gear
@@ -2401,7 +2408,46 @@ def _in_poly(p, poly) -> bool:
     return inside
 
 
-def _turned_part(dxf_path: str, views: list, skip: set, diameters: list, lengths: list = ()) -> dict | None:
+def _bevel_teeth(ops: list, metal: list, fn, table: dict, si: int):
+    """A bevel gear's teeth (circular or straight, from its table): the toothed rim — the area of
+    the section reaching the tip — is turned first, the tooth space cut through sections along the
+    tooth line and copied round, then the rest of the blank is added (it gives back whatever the
+    space, cut past the teeth's ends, took from it)."""
+    import bevel
+    # the rim: the area with the section's highest point (the tip at the back end)
+    pts = lambda f: [fn(q) for q in f["outline"]["points"]]  # noqa: E731
+    k_rim = max(range(len(metal)), key=lambda k: max(y for _, y in pts(metal[k])))
+    rim = pts(metal[k_rim])
+    i_top = max(range(len(rim)), key=lambda i: (rim[i][1], rim[i][0]))
+    x_tip, r_tip = rim[i_top]
+    # the tip cone: from the top corner the outline runs down towards the apex (smaller x)
+    nb = [rim[(i_top - 1) % len(rim)], rim[(i_top + 1) % len(rim)]]
+    front = [q for q in nb if q[0] < x_tip - 0.3]
+    tip_angle = math.degrees(math.atan2(r_tip - front[0][1], x_tip - front[0][0])) if front else None
+    p = bevel.params(table, tip_angle if tip_angle and 20 < tip_angle < 85 else None)
+    ha_e = p["ham"] + (p["Re"] - p["Rm"]) * math.tan(p["theta_a"])
+    x_apex = x_tip - p["Re"] * math.cos(p["delta"]) + ha_e * math.sin(p["delta"])
+    secs = bevel.sections(p, x_apex)
+    rim_op = ops[k_rim]
+    rest = [o for k, o in enumerate(ops) if k != k_rim]
+    kind = "круговым" if p["circular"] else "прямым"
+    new = [rim_op,
+           # auto_path: KOMPAS pairs the 4 pieces itself (in order it took a flank for the other
+           # one now and then, and the space came out wavy)
+           {"op": "loft", "cut": True, "plane": "YZ", "sections": secs, "auto_path": True,
+            "comment": f"впадина между зубьями по сечениям (зуб {kind}, β {table.get('beta', 0):g}°)"},
+           {"op": "circular", "plane": "YZ", "x": 0.0, "y": 0.0, "count": p["z"],
+            "comment": f"впадины: {p['z']} шт. по кругу"}] + rest
+    notes = [f"Коническое колесо по таблице: z {p['z']}, mn {p['mn']:g}, δ {math.degrees(p['delta']):g}°, "
+             f"зуб {kind}" + (f", β {table.get('beta', 0):g}° {'правое' if p['hand'] == 'right' else 'левое'}, "
+                              f"резцовая головка Ø{2 * p['r0']:g}" if p["circular"] else "") +
+             f"; Re {p['Re']:g}, ширина венца {p['b']:g}; профиль — эвольвента эквивалентного колеса "
+             f"(по Тредгольду), впадина по {len(secs)} сечениям"]
+    return new, notes
+
+
+def _turned_part(dxf_path: str, views: list, skip: set, diameters: list, lengths: list = (),
+                 bevel: dict | None = None) -> dict | None:
     """A turned part drawn as a section along its axis (hatched, as tall as the part's biggest
     diameter) beside a view of its face (round: concentric circles, the outer one that diameter) —
     «Колесо»: the hatched areas above the axis are turned round it, then what the face view shows
@@ -2473,13 +2519,21 @@ def _turned_part(dxf_path: str, views: list, skip: set, diameters: list, lengths
                             "shapes": dxf.outline_shapes(f["outline"], fn) + [ax_line],
                             "comment": f"тело вращения по разрезу (вид {si + 1}), область X "
                                        f"{f['box'][0] - b[0]:.1f}…{f['box'][2] - b[0]:.1f}"})
+            teeth_notes = []
+            if bevel and metal:
+                try:
+                    ops, teeth_notes = _bevel_teeth(ops, metal, fn, bevel, si)
+                except Exception as e:  # noqa: BLE001 — the blank stays
+                    teeth_notes = [f"Зубья конического колеса не построены: {e}"]
             for clip in crossing:
-                ops.insert(0, {"op": "revolve", "plane": "XY", "angle": 360,
+                # after the teeth (their space, cut past the ends, must not take from it), else first
+                ops.insert(3 if teeth_notes and ops and ops[1].get("op") == "loft" else 0,
+                           {"op": "revolve", "plane": "XY", "angle": 360,
                                "shapes": [{"type": "polyline", "closed": True,
                                            "points": [list(fn(p)) for p in clip]}, ax_line],
                                "comment": f"тело вращения по разрезу (вид {si + 1}): сплошная часть над осью"})
             notes = [f"Тело вращения: разрез вдоль оси — вид {si + 1}, торец — вид {ri + 1} "
-                     f"(Ø{D:.4g}); по разрезу повернуто {len(ops)} обл."]
+                     f"(Ø{D:.4g}); по разрезу повернуто {len(metal) + len(crossing)} обл."] + teeth_notes
             # the bore as the face view shows it (a keyway beside the round hole): cut along the axis
             rb = views[ri]["box_mm"]
             inner = [f for f in dxf.faces(doc, rb) if not f["body"] and _in_poly((rcx, rcy), f["outline"]["points"])
@@ -2576,7 +2630,8 @@ def _geometry(a: dict) -> None:
         src = os.path.join(os.path.dirname(_upload_path(a["views"][0])), "source.dxf")
         try:
             vn0 = vector.get("numbers") or {}
-            tp = _turned_part(src, vector["views"], skip, vn0.get("diameters", []), vn0.get("values", []))
+            tp = _turned_part(src, vector["views"], skip, vn0.get("diameters", []), vn0.get("values", []),
+                              vector.get("bevel"))
         except Exception as e:  # noqa: BLE001
             tp = None
             print("turned part:", e, flush=True)
@@ -2584,7 +2639,9 @@ def _geometry(a: dict) -> None:
             D = min((vector.get("numbers") or {}).get("diameters", []), key=lambda v: abs(v - tp["diameter"]),
                     default=tp["diameter"])
             D = D if abs(D - tp["diameter"]) <= 0.4 else round(tp["diameter"], 2)
-            a["geometry"] = {"notes": tp["notes"] + ["Зубья (если есть) не построены: венец — тело вращения по разрезу"],
+            toothed = any(o.get("op") == "circular" for o in tp["operations"])
+            a["geometry"] = {"notes": tp["notes"] + ([] if toothed else
+                                                     ["Зубья (если есть) не построены: венец — тело вращения по разрезу"]),
                              "questions": [], "issues": []}
             a["reading"]["plan"] = {"operations": tp["operations"], "source": "picture"}
             a["reading"]["overall"] = {"length": tp["length"], "width": D, "height": D}
