@@ -229,8 +229,16 @@ def segment_views(path: str, out_dir: str, max_views: int = 6) -> list[dict]:
     found = found[:max(max_views, 8)]
     with Image.open(path) as im:
         full = im.convert("RGB")
-    H = full.height
-    found.sort(key=lambda b: (round(b[4][1] / (0.25 * H)), b[4][0]))
+    # reading order: rows of views whose heights overlap, left to right in a row
+    found.sort(key=lambda b: b[4][1])
+    rows, bottom = [], None
+    for b in found:
+        if bottom is None or b[4][1] > bottom:
+            rows.append([])
+            bottom = b[4][3]
+        rows[-1].append(b)
+        bottom = max(bottom, b[4][3])
+    found = [b for r in rows for b in sorted(r, key=lambda b: b[4][0])]
     os.makedirs(out_dir, exist_ok=True)
     views = []
     for i, (x0, y0, x1, y1, core) in enumerate(found, 1):

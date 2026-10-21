@@ -199,6 +199,31 @@ table.dims .orig { color: var(--muted); font-size: 11px; }
 .feat { font-size: 12px; margin: 0; padding-left: 18px; }
 .rvfoot { display: flex; gap: 8px; justify-content: flex-end; padding: 10px 12px; border-top: 1px solid var(--panel-border); flex: none; }
 .rvnote { display: flex; gap: 6px; }
+/* the sheet with what was recognised on it */
+#rvSheet .sheetbar { display: flex; gap: 12px; align-items: center; font-size: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+#rvSheet .sheetbar label { display: flex; gap: 4px; align-items: center; color: var(--muted); }
+#rvSheet .sheetbar input { width: auto; }
+#rvSheet .sw { display: inline-block; width: 10px; height: 10px; border: 2px solid; border-radius: 2px; }
+#rvSheet .stage { position: relative; height: 420px; background: #fff; border: 1px solid var(--panel-border); overflow: hidden; cursor: grab; }
+#rvSheet .stage.drag { cursor: grabbing; }
+#rvSheet canvas { position: absolute; left: 0; top: 0; }
+#rvSheet .tip { position: absolute; pointer-events: none; background: rgba(30,30,30,.85); color: #fff; font-size: 11px; padding: 2px 6px; border-radius: 2px; display: none; white-space: nowrap; }
+#rvSummary { padding: 8px 10px; border: 1px solid var(--panel-border); border-left: 4px solid var(--accent); background: var(--toolbar); font-size: 12px; display: flex; flex-direction: column; gap: 3px; }
+#rvSummary.ok { border-left-color: var(--ok); } #rvSummary.warn { border-left-color: var(--warn); } #rvSummary.err { border-left-color: var(--err); }
+#rvSummary .k { font-weight: 600; font-size: 13px; }
+#rvSummary .good { color: var(--ok); } #rvSummary .bad { color: var(--err); } #rvSummary .so { color: var(--warn); }
+table.dims tr.hl td { background: rgba(6,150,215,.16); }
+table.dims tr.offf td { opacity: .45; }
+#rvFeatBody .pp { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; font-size: 11px; color: var(--muted); }
+#rvFeatBody .pp input { width: 62px; padding: 2px 4px; text-align: right; }
+.cmp .ovbtn { margin-top: 4px; font-size: 11px; padding: 2px 8px; }
+.cmp canvas { max-width: 100%; cursor: zoom-in; }
+/* batch */
+#bxBack { position: fixed; inset: 34px 0 0 0; background: rgba(0,0,0,.3); display: none; z-index: 45; }
+#bxBack.open { display: block; }
+#batch { position: absolute; inset: 40px 80px; }
+#batch .bxbody { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+#bxRows td.st-done { color: var(--ok); } #bxRows td.st-error { color: var(--err); } #bxRows td.st-work { color: var(--accent); }
 @media (max-width: 1000px) { #review .rvbody { grid-template-columns: 1fr; } }
 
 @media (max-width: 1000px) {
@@ -256,6 +281,7 @@ table.dims .orig { color: var(--muted); font-size: 11px; }
       <button class="tbtn" id="tbNew"><svg><use href="#i-new"/></svg><span>Новый</span></button>
       <button class="tbtn" id="tbAttach"><svg><use href="#i-pdf"/></svg><span>Чертёж</span></button>
       <button class="tbtn" id="tbReview" title="Разобрать приложенный чертёж с проверкой размеров"><svg><use href="#i-2d"/></svg><span>Разбор</span></button>
+      <button class="tbtn" id="tbBatch" title="Распознать и построить сразу много чертежей, со сверкой массы со штампом"><svg><use href="#i-2d"/></svg><span>Пакет</span></button>
       <button class="tbtn" id="tbExamples"><svg><use href="#i-bulb"/></svg><span>Примеры ▾</span></button>
     </div>
     <div class="glabel">Диалог</div>
@@ -356,11 +382,15 @@ table.dims .orig { color: var(--muted); font-size: 11px; }
     <div class="rvbody">
       <div id="rvLeft">
         <div class="rvstage" id="rvStage"></div>
+        <div id="rvSheet"></div>
         <div id="rvCompare"></div>
       </div>
       <div id="rvRight">
+        <div id="rvSummary"></div>
         <div><b>Размеры, прочитанные с чертежа</b><div class="hint">Форму программа берёт с самих видов, числа — отсюда. Проверьте значения, ось и признак габарита. Жёлтым — модель не уверена, красным — участвуют в замечании.</div></div>
         <table class="dims"><thead><tr><th>№</th><th>Что задаёт</th><th>Вид</th><th>Значение</th></tr></thead><tbody id="rvDims"></tbody></table>
+        <div><b>Элементы детали</b><div class="hint">Из чего строится деталь, по порядку. Снимите галочку, чтобы элемент не строился; поправьте центр и размеры отверстия или паза (координаты в плоскости эскиза, мм). Наведите на строку — элемент подсветится на листе.</div></div>
+        <table class="dims" id="rvFeat"><tbody id="rvFeatBody"></tbody></table>
         <div><b>Замечания проверки</b></div>
         <div id="rvIssues"></div>
         <div><b>Что программа нашла на видах</b></div>
@@ -378,6 +408,25 @@ table.dims .orig { color: var(--muted); font-size: 11px; }
       <button class="btn" id="rvCancel" type="button">Отмена</button>
       <button class="btn" id="rvCheck" type="button">Проверить и показать проекции</button>
       <button class="btn primary" id="rvAccept" type="button" disabled>Принять деталь</button>
+    </div>
+  </div>
+</div>
+
+<div id="bxBack">
+  <div class="panel" id="batch" role="dialog" aria-label="Пакетная обработка чертежей">
+    <div class="phead">Пакетная обработка чертежей<span class="spacer"></span><button id="bxX" title="Закрыть">✕</button></div>
+    <div class="bxbody">
+      <div class="hint">Выберите сразу несколько чертежей. Каждый распознаётся без модели ИИ, строится в КОМПАСе, сверяется с массой из штампа и проверяется на ошибки КОМПАСа. Чертежи, которым нужна модель ИИ, помечаются — их разберите по одному.</div>
+      <div class="rvnote" style="align-items:center">
+        <button class="btn" id="bxPick" type="button">Выбрать чертежи…</button>
+        <label class="hint" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="bxSave" style="width:auto"> сохранять модели (.m3d и .step) в папку вывода</label>
+        <span class="spacer" style="flex:1"></span>
+        <button class="btn primary" id="bxRun" type="button" disabled>Запустить</button>
+        <button class="btn" id="bxStop" type="button" disabled>Стоп</button>
+      </div>
+      <input type="file" id="bxFile" multiple accept=".png,.jpg,.jpeg,.pdf,.dxf,.dwg,.cdw,.frw" hidden>
+      <table class="dims" id="bxTable"><thead><tr><th>Чертёж</th><th>Состояние</th><th>Распознано как</th><th>Масса модели</th><th>По штампу</th><th>Ошибки КОМПАСа</th><th></th></tr></thead><tbody id="bxRows"></tbody></table>
+      <div id="bxTotal" class="hint"></div>
     </div>
   </div>
 </div>
@@ -692,6 +741,8 @@ async function startReview(url, note = "", exclude = [], ai = false) {
   // a new drawing (or reading this one again) starts clean: nothing of the previous review stays
   $("rvDims").innerHTML = ""; $("rvIssues").innerHTML = ""; $("rvFeatures").innerHTML = ""; $("rvQuestions").innerHTML = "";
   $("rvResult").textContent = "ещё не строилось"; $("rvCompare").innerHTML = "";
+  $("rvSheet").innerHTML = ""; $("rvSummary").innerHTML = ""; $("rvSummary").className = ""; $("rvFeatBody").innerHTML = "";
+  sheet = null;
   const src = el("div", "cmp"); src.appendChild(figure(url, "Исходный лист")); $("rvCompare").appendChild(src);
   await rvStream("/api/drawing/analyze", { image: url, note, exclude, ai }, "Начинаю разбор…", "Модель читает чертёж");
 }
@@ -716,6 +767,7 @@ async function rvStream(path, payload, startText, label) {
           // the same analysis re-planned keeps what the user typed; another one starts from its own
           const same = rv && rv.id === ev.id;
           rv = { ...(same ? rv : {}), ...ev, answers: same ? { ...(ev.answers || {}), ...(rv.answers || {}) } : (ev.answers || {}),
+                 featureEdits: same ? (rv.featureEdits || {}) : { ...(ev.feature_edits || {}) },
                  projections: null, build: null };
           stage.innerHTML = ""; renderReview();
           // compared with the model's reading (a comment was written): the part is built right away,
@@ -729,7 +781,7 @@ async function rvStream(path, payload, startText, label) {
 
 function rvPayload() {
   return { id: rv.id, values: rv.values, dimensions: rv.reading.dimensions, views: rv.reading.views,
-           answers: rv.answers || {}, note: $("rvNote").value.trim() };
+           answers: rv.answers || {}, note: $("rvNote").value.trim(), features: rv.featureEdits || {} };
 }
 
 function renderReview() {
@@ -757,7 +809,20 @@ function renderReview() {
     if (sel.value === "исключить") { fig.classList.add("excluded"); fig.querySelector("img").style.opacity = "0.35"; }
     row.appendChild(fig);
     const proj = rv.projections && rv.projections[PROJ_FOR[name]];
-    if (proj) row.appendChild(figure(`data:${proj.mime};base64,${proj.data}`, `Модель: ${name}`));
+    if (proj) {
+      const psrc = `data:${proj.mime};base64,${proj.data}`;
+      const pf = figure(psrc, `Модель: ${name}`);
+      // the model's view laid over the drawing's: what differs shows in red
+      const ob = el("button", "btn ovbtn", "Наложить на чертёж"); ob.type = "button";
+      ob.title = "Проекция модели красным поверх вида чертежа (на видах с разрывом длина не совпадёт — так и должно быть)";
+      ob.onclick = () => {
+        const img = fig.querySelector("img, canvas");
+        if (img.tagName === "CANVAS") { img.replaceWith(zoomable(url)); ob.textContent = "Наложить на чертёж"; return; }
+        overlayCanvas(url, psrc, (rv.cores || [])[i]).then(c => { img.replaceWith(c); ob.textContent = "Убрать наложение"; });
+      };
+      pf.appendChild(ob);
+      row.appendChild(pf);
+    }
     else row.appendChild(el("div", "hint", rv.projections ? "У модели нет такого вида" : "Проекция появится после проверки"));
     cmp.appendChild(row);
   });
@@ -774,6 +839,7 @@ function renderReview() {
     }
     if (row.children.length) cmp.appendChild(row);
   }
+  renderSheet(); renderFeatures(); renderSummary();
   // dimension fields
   const flagged = new Set((rv.issues || []).flatMap(i => i.dims || []));
   const excluded = new Set((R.views || []).filter(v => v.name === "исключить").map(v => v.image));
@@ -782,6 +848,8 @@ function renderReview() {
     const vm = /(?:вид|изображени\w*|image)\s*(\d+)/i.exec(d.view || "");
     const off = vm && excluded.has(+vm[1]);
     const tr = el("tr", off ? "off" : flagged.has(d.id) ? "bad" : (d.confidence < 0.7 ? "low" : ""));
+    tr.dataset.dim = d.id;
+    tr.onmouseenter = () => sheetHighlight(it => it.dim_id === d.id); tr.onmouseleave = () => sheetHighlight(null);
     if (off) { tr.style.opacity = "0.4"; tr.title = "С исключённого вида: в расчёте не участвует"; }
     tr.appendChild(el("td", null, d.id));
     const tdm = el("td"); const mi = el("input"); mi.value = d.meaning || ""; mi.style.width = "100%";
@@ -889,6 +957,313 @@ function regionPreview(url, region) {
   img.src = url;
   for (const c of [whole, zoom]) c.onclick = () => window.open(url, "_blank");
   return box;
+}
+
+// ---------- the sheet with what was recognised on it ----------
+const MARK = { view: ["#7a7a7a", "виды"], dim: ["#1f9d55", "размеры"], hole: ["#e02020", "отверстия"],
+               slot: ["#e8730c", "пазы"], end: ["#8e44ad", "торцы"] };
+let sheet = null;   // {img, k, ox, oy, items, show, hl, sel}
+
+function renderSheet() {
+  const box = $("rvSheet"), ov = rv.overlay;
+  if (!ov) { box.innerHTML = ""; sheet = null; return; }
+  if (sheet && sheet.src === ov.image) { sheet.items = ov.items; drawSheet(); return; }
+  box.innerHTML = "";
+  const bar = el("div", "sheetbar"); bar.appendChild(el("b", null, "Что распознано на листе"));
+  const show = {};
+  for (const [k, [col, name]] of Object.entries(MARK)) {
+    if (!ov.items.some(it => it.kind === k)) continue;
+    show[k] = true;
+    const lb = el("label"); const cb = el("input"); cb.type = "checkbox"; cb.checked = true;
+    cb.onchange = () => { show[k] = cb.checked; drawSheet(); };
+    const sw = el("span", "sw"); sw.style.borderColor = col;
+    lb.append(cb, sw, document.createTextNode(name)); bar.appendChild(lb);
+  }
+  const fit = el("button", "btn ovbtn", "Весь лист"); fit.type = "button"; fit.onclick = () => { fitSheet(); drawSheet(); };
+  bar.appendChild(fit);
+  bar.appendChild(el("span", "hint", "колесо — масштаб, перетаскивание — сдвиг, щелчок — к строке таблицы"));
+  const stage = el("div", "stage"), cv = el("canvas"), tip = el("div", "tip");
+  stage.append(cv, tip); box.append(bar, stage);
+  const img = new Image();
+  sheet = { src: ov.image, img, items: ov.items, show, hl: null, sel: null, cv, tip, stage, k: 1, ox: 0, oy: 0 };
+  img.onload = () => { fitSheet(); drawSheet(); };
+  img.src = ov.image;
+  const at = e => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left - sheet.ox) / sheet.k, (e.clientY - r.top - sheet.oy) / sheet.k]; };
+  const hit = e => {
+    const [x, y] = at(e), W = img.naturalWidth, H = img.naturalHeight;
+    // the smallest item under the pointer (a hole inside a view, not the view)
+    let best = null, area = Infinity;
+    for (const it of sheet.items) {
+      if (!sheet.show[it.kind]) continue;
+      const [a, b, c, d] = it.box;
+      if (x >= a * W && x <= c * W && y >= b * H && y <= d * H && (c - a) * (d - b) < area) { best = it; area = (c - a) * (d - b); }
+    }
+    return best;
+  };
+  let drag = null;
+  stage.onwheel = e => {
+    e.preventDefault();
+    const r = cv.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+    const f = e.deltaY < 0 ? 1.25 : 0.8;
+    sheet.ox = mx - (mx - sheet.ox) * f; sheet.oy = my - (my - sheet.oy) * f; sheet.k *= f; drawSheet();
+  };
+  stage.onmousedown = e => { drag = { x: e.clientX, y: e.clientY, ox: sheet.ox, oy: sheet.oy, moved: false }; stage.classList.add("drag"); };
+  window.addEventListener("mouseup", () => { drag = null; stage.classList.remove("drag"); });
+  stage.onmousemove = e => {
+    if (drag) {
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+      sheet.ox = drag.ox + dx; sheet.oy = drag.oy + dy; drawSheet(); return;
+    }
+    const it = hit(e), r = stage.getBoundingClientRect();
+    if (it) { tip.style.display = "block"; tip.textContent = it.label + (it.op != null ? ` — элемент №${it.op + 1}` : ""); tip.style.left = (e.clientX - r.left + 12) + "px"; tip.style.top = (e.clientY - r.top + 12) + "px"; }
+    else tip.style.display = "none";
+    if (sheet.hover !== it) { sheet.hover = it; drawSheet(); }
+  };
+  stage.onmouseleave = () => { tip.style.display = "none"; sheet.hover = null; drawSheet(); };
+  stage.onclick = e => {
+    if (drag && drag.moved) return;
+    const it = hit(e); if (!it) return;
+    sheet.sel = it; drawSheet();
+    // to the row that holds it
+    let row = null;
+    if (it.op != null) row = document.querySelector(`#rvFeatBody tr[data-op="${it.op}"]`);
+    else if (it.dim_id) row = document.querySelector(`#rvDims tr[data-dim="${it.dim_id}"]`);
+    else if (it.image) row = $("rvCompare").children[it.image - 1];
+    if (row) { row.scrollIntoView({ block: "center", behavior: "smooth" }); row.classList.add("hl"); setTimeout(() => row.classList.remove("hl"), 1600); }
+  };
+}
+
+function fitSheet() {
+  const s = sheet; if (!s || !s.img.naturalWidth) return;
+  const W = s.stage.clientWidth, H = s.stage.clientHeight;
+  s.k = Math.min(W / s.img.naturalWidth, H / s.img.naturalHeight);
+  s.ox = (W - s.img.naturalWidth * s.k) / 2; s.oy = (H - s.img.naturalHeight * s.k) / 2;
+}
+
+function drawSheet() {
+  const s = sheet; if (!s || !s.img.naturalWidth) return;
+  const cv = s.cv, W = s.stage.clientWidth, H = s.stage.clientHeight;
+  cv.width = W; cv.height = H;
+  const g = cv.getContext("2d"), iw = s.img.naturalWidth, ih = s.img.naturalHeight;
+  g.fillStyle = "#fff"; g.fillRect(0, 0, W, H);
+  g.save(); g.translate(s.ox, s.oy); g.scale(s.k, s.k);
+  g.drawImage(s.img, 0, 0);
+  for (const it of s.items) {
+    if (!s.show[it.kind]) continue;
+    const [a, b, c, d] = it.box, col = MARK[it.kind][0];
+    const on = (s.hl && s.hl(it)) || s.hover === it || s.sel === it;
+    g.lineWidth = (on ? 3.5 : it.kind === "view" ? 1.2 : 2) / s.k;
+    g.strokeStyle = col;
+    if (it.kind === "view") g.setLineDash([8 / s.k, 5 / s.k]); else g.setLineDash([]);
+    g.globalAlpha = on ? 0.28 : 0.10; g.fillStyle = col;
+    if (it.kind !== "view" || on) g.fillRect(a * iw, b * ih, (c - a) * iw, (d - b) * ih);
+    g.globalAlpha = 1; g.strokeRect(a * iw, b * ih, (c - a) * iw, (d - b) * ih);
+    if (it.kind === "view" || on) {
+      g.setLineDash([]); g.font = `${12 / s.k}px Segoe UI`; g.fillStyle = col;
+      g.fillText(it.label, a * iw + 3 / s.k, b * ih - 4 / s.k);
+    }
+  }
+  g.restore();
+}
+
+function sheetHighlight(fn) { if (sheet) { sheet.hl = fn; drawSheet(); } }
+
+// ---------- the feature table ----------
+const PARAM_NAMES = { x: "центр 1", y: "центр 2", d: "Ø", w: "ширина", h: "высота" };
+function renderFeatures() {
+  const tb = $("rvFeatBody"); tb.innerHTML = "";
+  rv.featureEdits = rv.featureEdits || {};
+  const feats = rv.features || [];
+  if (!feats.length) { const tr = el("tr"); const td = el("td", "hint", "Таблица элементов появится, когда план будет составлен."); td.colSpan = 2; tr.appendChild(td); tb.appendChild(tr); return; }
+  feats.forEach((f, n) => {
+    const e = rv.featureEdits[f.id] || {};
+    const tr = el("tr", e.on === false ? "offf" : ""); tr.dataset.op = n;
+    const t1 = el("td"); const cb = el("input"); cb.type = "checkbox"; cb.style.width = "auto";
+    cb.checked = e.on !== false; cb.disabled = f.base;
+    cb.title = f.base ? "Основное тело — без него детали нет" : "Строить этот элемент";
+    cb.onchange = () => { rv.featureEdits[f.id] = { ...(rv.featureEdits[f.id] || {}), on: cb.checked }; tr.className = cb.checked ? "" : "offf"; $("rvAccept").disabled = true; };
+    t1.appendChild(cb); tr.appendChild(t1);
+    const t2 = el("td"); t2.appendChild(el("div", null, `${f.n}. ${f.label}`));
+    const keys = Object.keys(f.params || {});
+    if (keys.length) {
+      const pp = el("div", "pp");
+      for (const k of keys) {
+        const inp = el("input"); inp.type = "number"; inp.step = "any";
+        const cur = (e.params || {})[k]; inp.value = cur ?? f.params[k];
+        inp.title = `${PARAM_NAMES[k] || k}, мм (было ${f.params[k]})`;
+        inp.oninput = () => {
+          const ed = rv.featureEdits[f.id] = { ...(rv.featureEdits[f.id] || {}) };
+          ed.params = { ...(ed.params || {}), [k]: parseFloat(inp.value) }; $("rvAccept").disabled = true;
+        };
+        pp.append(document.createTextNode(PARAM_NAMES[k] || k), inp);
+      }
+      if (f.plane) pp.append(document.createTextNode(`(плоскость ${f.plane})`));
+      t2.appendChild(pp);
+    }
+    tr.appendChild(t2);
+    tr.onmouseenter = () => sheetHighlight(it => it.op === n); tr.onmouseleave = () => sheetHighlight(null);
+    tb.appendChild(tr);
+  });
+}
+
+// ---------- what came out: recognised as, mass against the title block, KOMPAS errors ----------
+function renderSummary() {
+  const s = $("rvSummary"); s.innerHTML = ""; s.className = "";
+  s.appendChild(el("div", "k", "Распознано как: " + (rv.recognised || "—")));
+  const stamp = rv.mass_stamp;
+  const b = rv.build;
+  if (!b) {
+    s.appendChild(el("div", null, stamp ? `Масса по штампу: ${stamp} кг. Нажмите «Проверить», чтобы построить и сверить.` :
+      "Масса в штампе не найдена. Нажмите «Проверить», чтобы построить деталь."));
+    return;
+  }
+  if (b.error) { s.className = "err"; s.appendChild(el("div", "bad", "Деталь не построена: " + b.error)); return; }
+  const m = (b.mass_g || 0) / 1000;
+  const line = el("div"); line.append(document.createTextNode(`Масса модели ${m.toFixed(3)} кг`));
+  let level = "ok";
+  if (stamp) {
+    const pct = 100 * (m / stamp - 1);
+    const sp = el("span", Math.abs(pct) <= 3 ? "good" : Math.abs(pct) <= 8 ? "so" : "bad",
+                  ` · по штампу ${stamp} кг (${pct > 0 ? "+" : ""}${pct.toFixed(1)} %)`);
+    if (Math.abs(pct) > 3) level = Math.abs(pct) <= 8 ? "warn" : "err";
+    line.appendChild(sp);
+  } else line.append(document.createTextNode(" · в штампе массы нет"));
+  s.appendChild(line);
+  const bad = (b.invalid || []).length;
+  s.appendChild(el("div", bad ? "bad" : "good", bad ? `Ошибки КОМПАСа: ${bad} (${b.invalid.map(x => x.n).join(", ")})` : "Ошибок КОМПАСа нет"));
+  if (bad || b.failed) level = "err";
+  const sk = (b.skipped || []).length;
+  if (sk) { s.appendChild(el("div", "so", `Пропущено операций: ${sk}`)); if (level === "ok") level = "warn"; }
+  if ((rv.issues || []).some(i => i.level === "error")) { s.appendChild(el("div", "bad", "Есть замечания проверки — см. ниже")); level = "err"; }
+  if (b.size_mm) s.appendChild(el("div", "hint", `Габарит ${b.size_mm.map(v => +v.toFixed(2)).join(" × ")} мм`));
+  s.className = level;
+}
+
+// the model's projection laid over the drawing's view, scaled so the drawn parts' heights match
+async function overlayCanvas(viewUrl, projSrc, core) {
+  const load = src => new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = no; i.src = src; });
+  const [v, p] = await Promise.all([load(viewUrl), load(projSrc)]);
+  const ink = img => {   // the box of the drawn (non-white) pixels
+    const c = document.createElement("canvas"); c.width = img.naturalWidth; c.height = img.naturalHeight;
+    const g = c.getContext("2d"); g.drawImage(img, 0, 0);
+    const d = g.getImageData(0, 0, c.width, c.height).data;
+    let x0 = c.width, y0 = c.height, x1 = 0, y1 = 0;
+    for (let y = 0; y < c.height; y += 2) for (let x = 0; x < c.width; x += 2) {
+      const i = (y * c.width + x) * 4;
+      if (d[i + 3] > 0 && d[i] + d[i + 1] + d[i + 2] < 600) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    }
+    return { c, g, box: x1 > x0 ? [x0, y0, x1, y1] : [0, 0, c.width, c.height] };
+  };
+  const P = ink(p);
+  const vb = core ? [core[0] * v.naturalWidth, core[1] * v.naturalHeight, core[2] * v.naturalWidth, core[3] * v.naturalHeight] : ink(v).box;
+  const out = document.createElement("canvas"); out.width = v.naturalWidth; out.height = v.naturalHeight;
+  const g = out.getContext("2d"); g.drawImage(v, 0, 0);
+  // the projection's lines in red
+  const pd = P.g.getImageData(0, 0, P.c.width, P.c.height), d = pd.data;
+  for (let i = 0; i < d.length; i += 4) {
+    // only the projection's edge lines (its faces are shaded grey)
+    const dark = d[i] + d[i + 1] + d[i + 2] < 300;
+    d[i] = 230; d[i + 1] = 20; d[i + 2] = 20; d[i + 3] = dark ? 255 : 0;
+  }
+  P.g.putImageData(pd, 0, 0);
+  // thickened a little: the projection is scaled down onto the view
+  const thick = document.createElement("canvas"); thick.width = P.c.width; thick.height = P.c.height;
+  const tg = thick.getContext("2d");
+  for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [-1, 0], [0, -1]]) tg.drawImage(P.c, dx, dy);
+  P.c = thick;
+  const [a, b, c, e] = P.box, k = (vb[3] - vb[1]) / Math.max(1, e - b);
+  g.drawImage(P.c, a, b, c - a, e - b, vb[0], vb[1], (c - a) * k, (e - b) * k);
+  out.title = "Красное — проекция модели, чёрное/синее — чертёж"; out.onclick = () => window.open(out.toDataURL(), "_blank");
+  return out;
+}
+
+// ---------- batch ----------
+let bxItems = [];
+$("tbBatch").onclick = () => { $("bxBack").classList.add("open"); };
+$("bxX").onclick = () => $("bxBack").classList.remove("open");
+$("bxPick").onclick = () => $("bxFile").click();
+$("bxFile").onchange = async () => {
+  const files = [...$("bxFile").files]; $("bxFile").value = "";
+  if (!files.length) return;
+  bxItems = []; $("bxRows").innerHTML = ""; $("bxTotal").textContent = ""; $("bxRun").disabled = true;
+  for (const f of files) {
+    const tr = el("tr"); const cells = [f.name, "загружаю…", "", "", "", "", ""].map(t => el("td", null, t));
+    cells.forEach(c => tr.appendChild(c)); $("bxRows").appendChild(tr);
+    const fd = new FormData(); fd.append("file", f);
+    try {
+      const r = await (await fetch("/api/upload", { method: "POST", body: fd })).json();
+      if (r.error) { cells[1].textContent = r.error; cells[1].className = "st-error"; continue; }
+      r.pages.forEach((url, i) => {
+        const row = i === 0 ? tr : $("bxRows").insertBefore(el("tr"), tr.nextSibling);
+        const cc = i === 0 ? cells : [f.name + ` (лист ${i + 1})`, "", "", "", "", "", ""].map(t => el("td", null, t));
+        if (i > 0) cc.forEach(c => row.appendChild(c));
+        if (i === 0 && r.pages.length > 1) cc[0].textContent = f.name + " (лист 1)";
+        cc[1].textContent = "в очереди";
+        bxItems.push({ image: url, name: r.pages.length > 1 ? `${f.name.replace(/\.\w+$/, "")}_лист${i + 1}` : f.name, cells: cc });
+      });
+    } catch (e) { cells[1].textContent = "ошибка загрузки"; cells[1].className = "st-error"; }
+  }
+  $("bxRun").disabled = !bxItems.length;
+};
+$("bxStop").onclick = () => api("/api/stop", { method: "POST" });
+$("bxRun").onclick = async () => {
+  $("bxRun").disabled = true; $("bxStop").disabled = false; $("bxPick").disabled = true;
+  let ok = 0, bad = 0, savedDir = "";
+  try {
+    const r = await fetch("/api/drawing/batch", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: bxItems.map(x => ({ image: x.image, name: x.name })), save: $("bxSave").checked }) });
+    const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "";
+    while (true) {
+      const { value, done } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i; while ((i = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 1); if (!line.trim()) continue;
+        const ev = JSON.parse(line);
+        if (ev.type === "error") { $("bxTotal").textContent = ev.text; continue; }
+        if (ev.type !== "row") continue;
+        const it = bxItems[ev.i]; if (!it) continue;
+        const c = it.cells;
+        c[1].textContent = ev.text || ({ done: "готово", error: "не распознан", work: "…", stopped: "остановлено" })[ev.status] || ev.status;
+        c[1].className = "st-" + ev.status;
+        if (ev.recognised) c[2].textContent = ev.recognised;
+        if (ev.id) {
+          c[6].innerHTML = ""; const ob = el("button", "btn ovbtn", "Открыть разбор"); ob.type = "button";
+          ob.onclick = () => openAnalysis(ev.id); c[6].appendChild(ob);
+        }
+        if (ev.status === "done") {
+          const b = ev.build || {};
+          const m = (b.mass_g || 0) / 1000;
+          c[3].textContent = b.error ? "не построена" : m.toFixed(3) + " кг";
+          if (ev.mass_stamp) {
+            const pct = 100 * (m / ev.mass_stamp - 1);
+            c[4].textContent = `${ev.mass_stamp} кг (${pct > 0 ? "+" : ""}${pct.toFixed(1)} %)`;
+            c[4].className = Math.abs(pct) <= 3 ? "st-done" : "st-error";
+          } else c[4].textContent = "нет в штампе";
+          const nb = (b.invalid || []).length + (b.failed ? 1 : 0);
+          c[5].textContent = b.error ? b.error : nb ? `есть: ${nb}` : "нет"; c[5].className = nb || b.error ? "st-error" : "st-done";
+          c[1].textContent = (ev.issues || []).length ? "готово, есть замечания" : (ev.saved || []).length ? "готово, сохранено" : "готово";
+          if (nb || b.error || (ev.issues || []).length) bad++; else ok++;
+          if ((ev.saved || []).length) c[1].title = ev.saved.join("\n");
+        } else if (ev.status === "error") bad++;
+        if ((ev.saved || []).length) savedDir = ev.saved[0].replace(/[\\/][^\\/]*$/, "");
+        $("bxTotal").textContent = `Готово без замечаний: ${ok}, с замечаниями или не распознано: ${bad} из ${bxItems.length}` +
+          (savedDir ? `. Модели сохранены в папку ${savedDir}` : "");
+      }
+    }
+  } catch (e) { $("bxTotal").textContent = "Ошибка: " + e; }
+  finally { $("bxStop").disabled = true; $("bxPick").disabled = false; $("bxRun").disabled = false; refreshStatus(); }
+};
+
+// an analysis the batch made, opened in the review window
+async function openAnalysis(id) {
+  const r = await api("/api/drawing/view", { method: "POST", body: JSON.stringify({ id }) });
+  if (r.error) { $("bxTotal").textContent = r.error; return; }
+  $("bxBack").classList.remove("open");
+  rvSource = r.sheet; sheet = null;
+  $("rvBack").classList.add("open"); $("rvAccept").disabled = true; $("rvStage").innerHTML = ""; $("rvSheet").innerHTML = "";
+  rv = { ...r, answers: r.answers || {}, featureEdits: { ...(r.feature_edits || {}) }, projections: null };
+  renderReview();
 }
 
 async function checkReview() {

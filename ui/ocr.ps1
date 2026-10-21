@@ -1,6 +1,6 @@
 param([string]$Image, [string]$Lang = "ru")
-# Windows' own OCR (Windows.Media.Ocr): local, no install. Prints one line per recognised line:
-# text <TAB> x <TAB> y <TAB> w <TAB> h   (pixels of the image)
+# Windows' own OCR (Windows.Media.Ocr): local, no install. Prints one line per recognised word:
+# text <TAB> x <TAB> y <TAB> w <TAB> h <TAB> line number   (pixels of the image)
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 $null = [Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime]
@@ -19,11 +19,11 @@ $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage([Windows.Globaliz
 if ($engine -eq $null) { $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages() }
 Write-Output ("#max " + [Windows.Media.Ocr.OcrEngine]::MaxImageDimension)
 $res = Await ($engine.RecognizeAsync($bmp)) ([Windows.Media.Ocr.OcrResult])
+$n = 0
 foreach ($line in $res.Lines) {
-    $xs = $line.Words | ForEach-Object { $_.BoundingRect }
-    $x0 = ($xs | Measure-Object -Property X -Minimum).Minimum
-    $y0 = ($xs | Measure-Object -Property Y -Minimum).Minimum
-    $x1 = ($xs | ForEach-Object { $_.X + $_.Width } | Measure-Object -Maximum).Maximum
-    $y1 = ($xs | ForEach-Object { $_.Y + $_.Height } | Measure-Object -Maximum).Maximum
-    Write-Output ("{0}`t{1}`t{2}`t{3}`t{4}" -f $line.Text, [int]$x0, [int]$y0, [int]($x1 - $x0), [int]($y1 - $y0))
+    foreach ($w in $line.Words) {
+        $r = $w.BoundingRect
+        Write-Output ("{0}`t{1}`t{2}`t{3}`t{4}`t{5}" -f $w.Text, [int]$r.X, [int]$r.Y, [int]$r.Width, [int]$r.Height, $n)
+    }
+    $n++
 }

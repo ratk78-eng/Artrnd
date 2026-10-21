@@ -3,7 +3,7 @@ rem All tests. The building ones need KOMPAS running and the app on 127.0.0.1:87
 rem part is also checked for features KOMPAS marks with an error (kcheck.py).
 set PYTHONIOENCODING=utf-8
 cd /d "%~dp0"
-for %%t in (parse_reading_test exclude_test arc_outline_test clean_shapes_test arrange_test fillet_plan_test constraints_test) do (
+for %%t in (parse_reading_test exclude_test arc_outline_test clean_shapes_test arrange_test fillet_plan_test constraints_test feature_edits_test) do (
   echo ===== %%t
   C:\Python\python.exe %%t.py 2>&1
 )

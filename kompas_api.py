@@ -85,8 +85,9 @@ class Kompas:
         info["kompas_running"] = True
         info["visible"] = bool(self.k5.Visible)
         docs = k7.Documents
-        info["open_documents"] = [docs.Item(i).PathName or docs.Item(i).Name or "(не сохранён)"
-                                  for i in range(docs.Count)]
+        # closed documents leave None placeholders in the collection
+        found = [docs.Item(i) for i in range(docs.Count)]
+        info["open_documents"] = [d.PathName or d.Name or "(не сохранён)" for d in found if d is not None]
         active = k7.ActiveDocument
         info["active_document"] = (active.PathName or active.Name or "(не сохранён)") if active else None
         info["active_document_type"] = int(active.DocumentType) if active else None

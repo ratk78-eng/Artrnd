@@ -123,7 +123,7 @@ class McpBridge:
             yield self
 
     # Used by the app itself (status bar, drawing upload); hiding them keeps the model's prompt shorter.
-    SERVICE_TOOLS = {"diagnostics", "convert_drawing"}
+    SERVICE_TOOLS = {"diagnostics", "convert_drawing", "close_document"}
 
     def openai_tools(self) -> list[dict]:
         return [{"type": "function",
@@ -487,7 +487,9 @@ def _prepare_vector(dxf_path: str, folder: str) -> None:
         return
     r = dxf.render(doc, os.path.join(folder, "source_vector.png"))
     meta = {"px_per_mm": r["px_per_mm"], "numbers": dxf.numbers(doc),
-            "hidden_lines": sum(e["kind"] == "hidden" for e in doc["entities"])}
+            "hidden_lines": sum(e["kind"] == "hidden" for e in doc["entities"]),
+            # where the sheet picture lies in the drawing's mm (for marking views on it)
+            "sheet": {"px_per_mm": r["px_per_mm"], "origin": list(r["origin"])}}
     # the views straight from the geometry (no frame, no title block), each drawn on its own
     boxes = dxf.view_boxes(doc)
     if boxes:
@@ -665,11 +667,149 @@ def _analysis_view(a: dict) -> dict:
     cc = a.get("crosscheck")
     if cc:
         issues = issues + cc.get("issues", [])
+    try:
+        feats = _op_features(drawing.resolve_plan((a["reading"].get("plan") or {}).get("operations", []), a["values"]))
+    except Exception:  # noqa: BLE001 — a plan with unresolved expressions shows no feature table
+        feats = []
     return {"id": a["id"], "views": a["views"], "reading": a["reading"], "values": a["values"],
             "issues": issues, "notes": g.get("notes", []), "questions": g.get("questions", []),
             "answers": a.get("answers", {}), "construction": g.get("construction"),
+            "recognised": _part_kind(a), "mass_stamp": a["reading"].get("mass_kg"), "sheet": a.get("sheet"),
+            "overlay": _overlay(a), "features": feats, "feature_edits": a.get("feature_edits", {}),
+            "cores": _view_cores(a),
             **({"crosscheck": {"model": cc.get("model"), "features": cc.get("features", []), "error": cc.get("error")}}
                if cc else {})}
+
+
+def _part_kind(a: dict) -> str:
+    """How the drawing was recognised, in the user's words."""
+    ops = (a["reading"].get("plan") or {}).get("operations") or []
+    if a.get("steel"):
+        return "Металлоконструкция: профиль из спецификации, вырезы и отверстия с видов"
+    if a.get("profile"):
+        return f"Деталь из проката: {a['reading'].get('title', '')}, длина и элементы по размерам на видах"
+    if a.get("revolve"):
+        return "Тело вращения по продольному разрезу"
+    vec = a.get("vector") or {}
+    if vec.get("shaft"):
+        return "Вал по продольному разрезу (векторный чертёж)"
+    if vec and ops and ops[0].get("op") == "revolve":
+        return "Тело вращения" + (" с зубьями" if any(o.get("op") == "circular" for o in ops) else "") + \
+            " (векторный чертёж)"
+    if vec:
+        return "Деталь по видам векторного чертежа (размеры из файла)"
+    return "Деталь по видам картинки (размеры прочитаны моделью ИИ)"
+
+
+def _view_cores(a: dict) -> list:
+    """Each view's drawn part inside its picture (fractions of the picture), when known."""
+    out = []
+    for box, core in zip(a.get("boxes") or [], a.get("cores") or []):
+        if not box or not core:
+            out.append(None)
+            continue
+        w, h = box[2] - box[0], box[3] - box[1]
+        out.append([(core[0] - box[0]) / w, (core[1] - box[1]) / h, (core[2] - box[0]) / w, (core[3] - box[1]) / h])
+    return out
+
+
+def _overlay(a: dict) -> dict | None:
+    """What was found where on the sheet, as fractions of the sheet picture: views, and for the
+    parts read off the picture by the program itself also the dimensions, holes, slots and ends
+    (`op` = the operation it became)."""
+    if not a.get("sheet"):
+        return None
+    size = a.get("sheet_size")
+    if not size:
+        try:
+            with PILImage.open(_upload_path(a["sheet"])) as im:
+                size = list(im.size)
+        except Exception:  # noqa: BLE001
+            return None
+        a["sheet_size"] = size
+    W, H = size
+    names = {v.get("image"): v.get("name") for v in a["reading"].get("views", [])}
+    items = []
+    if a.get("marks"):
+        for m in a["marks"]:
+            if m["kind"] == "view":
+                continue
+            items.append({**{k: v for k, v in m.items() if k not in ("box", "text")},
+                          "box": [m["box"][0] / W, m["box"][1] / H, m["box"][2] / W, m["box"][3] / H]})
+    boxes = a.get("boxes") or []
+    sh = (a.get("vector") or {}).get("sheet")
+    vviews = (a.get("vector") or {}).get("views") or []
+    if sh and vviews and len(vviews) == len(boxes):
+        # vector views: their boxes in mm, placed on the sheet picture
+        k, (ox, oy) = sh["px_per_mm"], sh["origin"]
+        boxes = [[(v["box_mm"][0] - ox) * k, (oy - v["box_mm"][3]) * k, (v["box_mm"][2] - ox) * k,
+                  (oy - v["box_mm"][1]) * k] if v.get("box_mm") else None for v in vviews]
+    elif a.get("vector"):
+        boxes = []   # (steel views and older files: not placed on the sheet)
+    for i, b in enumerate(boxes):
+        if b:
+            items.insert(0, {"kind": "view", "label": f"{i + 1}: {names.get(i + 1) or 'вид'}", "image": i + 1,
+                             "box": [b[0] / W, b[1] / H, b[2] / W, b[3] / H]})
+    return {"image": a["sheet"], "size": size, "items": items} if items else None
+
+
+def _op_features(ops: list[dict]) -> list[dict]:
+    """The plan's operations as rows the user can switch off or correct: a hole's centre and Ø,
+    a rectangular slot's centre and sizes (in the operation's sketch plane)."""
+    out = []
+    for n, op in enumerate(ops):
+        shapes = op.get("shapes") or []
+        f = {"id": f"op{n}", "n": n + 1, "op": op.get("op"), "plane": op.get("plane"),
+             "label": op.get("comment") or op.get("op", ""), "base": n == 0, "params": {}}
+        num = lambda v: isinstance(v, (int, float))  # noqa: E731
+        if shapes and all(s.get("type") == "circle" for s in shapes):
+            d0 = shapes[0].get("d") if num(shapes[0].get("d")) else (2 * shapes[0]["r"] if num(shapes[0].get("r")) else None)
+            if len(shapes) == 1 and num(shapes[0].get("x")) and num(shapes[0].get("y")) and d0:
+                f["params"] = {"x": round(shapes[0]["x"], 3), "y": round(shapes[0]["y"], 3), "d": round(d0, 3)}
+            elif d0:
+                f["params"] = {"d": round(d0, 3)}
+            f["shape"] = "circle"
+        elif len(shapes) == 1 and shapes[0].get("type") == "polyline":
+            pts = shapes[0].get("points") or []
+            if len(pts) == 4 and all(len(p) == 2 and num(p[0]) and num(p[1]) for p in pts):
+                xs, ys = sorted({round(p[0], 6) for p in pts}), sorted({round(p[1], 6) for p in pts})
+                if len(xs) == 2 and len(ys) == 2:
+                    f["params"] = {"x": round((xs[0] + xs[1]) / 2, 3), "y": round((ys[0] + ys[1]) / 2, 3),
+                                   "w": round(xs[1] - xs[0], 3), "h": round(ys[1] - ys[0], 3)}
+                    f["shape"] = "rect"
+        out.append(f)
+    return out
+
+
+def _apply_feature_edits(ops: list[dict], edits: dict) -> list[dict]:
+    """The user's corrections to the feature table applied to the resolved operations: switched
+    off rows are dropped, a hole's centre / Ø and a slot's centre / sizes replaced."""
+    if not edits:
+        return ops
+    feats = {f["id"]: f for f in _op_features(ops)}
+    out = []
+    for n, op in enumerate(ops):
+        e, f = edits.get(f"op{n}") or {}, feats.get(f"op{n}")
+        if e.get("on") is False and n > 0:
+            continue
+        p = {k: float(v) for k, v in (e.get("params") or {}).items()
+             if k in (f or {}).get("params", {}) and isinstance(v, (int, float, str)) and str(v).strip() != ""}
+        if p and f:
+            op = json.loads(json.dumps(op))
+            cur = {**f["params"], **p}
+            if f.get("shape") == "circle":
+                for s in op["shapes"]:
+                    s.pop("r", None)
+                    s["d"] = cur["d"]
+                    if "x" in cur:
+                        s["x"], s["y"] = cur["x"], cur["y"]
+            elif f.get("shape") == "rect":
+                x, y, w, h = cur["x"], cur["y"], cur["w"], cur["h"]
+                op["shapes"][0]["points"] = [[x - w / 2, y - h / 2], [x + w / 2, y - h / 2],
+                                             [x + w / 2, y + h / 2], [x - w / 2, y + h / 2]]
+            op["comment"] = (op.get("comment") or op.get("op", "")) + " (исправлено)"
+        out.append(op)
+    return out
 
 
 def _vector_layout(vec: dict, skip: set | None = None) -> dict | None:
@@ -2632,6 +2772,7 @@ def _geometry(a: dict) -> None:
             return
         a["geometry"] = {"notes": res["notes"], "questions": res["questions"], "issues": []}
         a["reading"]["plan"] = {"operations": res["operations"], "source": "picture"}
+        a["marks"], a["sheet_size"] = res["marks"], res["size"]
         return
     if a.get("revolve") and a["revolve"]["view"] not in skip:
         _geometry_revolve(a)
@@ -2939,177 +3080,200 @@ async def _crosscheck(a: dict, src: str, note: str, settings: dict, skip0: set):
 
 async def drawing_analyze(request: Request):
     body = await request.json()
+    return StreamingResponse(_guarded(_analyze_events(body), body), media_type="application/x-ndjson")
+
+
+async def _analyze_events(body: dict):
+    """The analysis of one drawing as a stream of events (stage, progress, error, analysis).
+    body: {image, note, exclude, ai, batch} — batch: no language model (a drawing that needs one
+    is reported, not read)."""
     exclude = [int(i) for i in body.get("exclude") or [] if str(i).isdigit()]
     skip0 = {i - 1 for i in exclude}
-
-    async def run():
-        global stop_requested
-        stop_requested = False
-        settings = _drawing_settings()
-        try:
-            src = _upload_path(body["image"])
-        except (KeyError, ValueError) as e:
-            yield _ev("error", text=str(e))
-            return
-        folder = os.path.dirname(src)
-        uid = os.path.basename(folder)
-        stem = os.path.splitext(os.path.basename(src))[0]
-        await anyio.to_thread.run_sync(_refresh_vector, folder)
-        vec = _vector_meta(src)
-        if vec and vec.get("steel"):
-            # steel detail: profile from the specification, cuts and holes from the views — no model
-            st = vec["steel"]
-            aid = uuid.uuid4().hex[:12]
-            reading = _mark_excluded(steel.reading(st), exclude)
-            a = {"id": aid, "views": [f"/uploads/{uid}/{f}" for f in vec["steel_views"]], "boxes": None,
-                 "reading": reading, "values": {d["id"]: d["value"] for d in reading["dimensions"]},
-                 "vector": vec, "steel": st}
-            analyses[aid] = a
-            prof = st["spec"]["profile"]
-            yield _ev("stage", text=f"Чертёж металлоконструкции: {prof['name']}, размеры из спецификации и видов…")
-            await anyio.to_thread.run_sync(_geometry, a)
-            yield _ev("analysis", **_analysis_view(a))
-            return
-        yield _ev("stage", text="Вырезаю виды с листа…")
-        if vec and vec.get("views"):
-            # vector: the views were found in the geometry itself when the file was loaded
-            views = [{"url": f"/uploads/{uid}/{v['file']}", "box": v["box"]} for v in vec["views"]]
-        else:
-            views = await anyio.to_thread.run_sync(drawing.segment_views, src, folder)
-            for v in views:  # unique names per source page
-                new = f"{stem}_{v['file']}"
-                os.replace(os.path.join(folder, v["file"]), os.path.join(folder, new))
-                v["url"] = f"/uploads/{uid}/{new}"
-        if not vec:
-            # a part from a rolled profile (the title block names it: «Труба 50х50х3 ГОСТ 8639-82»):
-            # the section is the profile, the length, ends, holes and slots come from the views
-            yield _ev("stage", text="Читаю штамп и размеры на листе…")
-            lines = await anyio.to_thread.run_sync(profile_raster.ocr_lines, src)
-            try:
-                res = await anyio.to_thread.run_sync(lambda: profile_raster.plan(src, lines=lines))
-            except Exception as e:  # noqa: BLE001
-                res = None
-                print("profile part:", e, flush=True)
-            if res:
-                aid = uuid.uuid4().hex[:12]
-                reading = _mark_excluded(profile_raster.reading(res), exclude)
-                a = {"id": aid, "views": [v["url"] for v in views], "boxes": [v["box"] for v in views],
-                     "reading": reading, "values": {d["id"]: d["value"] for d in reading["dimensions"]},
-                     "profile": {"path": src, "lines": lines}}
-                analyses[aid] = a
-                yield _ev("stage", text=f"Деталь из проката: {res['stock']['name']}, длина {res['length']:g} мм. "
-                                        "Снимаю торцы, отверстия и пазы с видов…")
-                await anyio.to_thread.run_sync(_geometry, a)
-                yield _ev("analysis", **_analysis_view(a))
-                return
-        if vec:
-            # vector drawing: the numbers are text in the file and the scale is exact — no model needed
-            aid = uuid.uuid4().hex[:12]
-            boxes = [v["box"] for v in views]
-            reading = _mark_excluded(_vector_reading(vec, [_upload_path(v["url"]) for v in views], boxes, skip0),
-                                     exclude)
-            a = {"id": aid, "views": [v["url"] for v in views], "boxes": boxes, "reading": reading,
-                 "values": {d["id"]: d["value"] for d in reading["dimensions"]}, "vector": vec}
-            analyses[aid] = a
-            yield _ev("stage", text="Векторный чертёж: размеры взяты из файла. Снимаю геометрию с видов…")
-            await anyio.to_thread.run_sync(_geometry, a)
-            note = (body.get("note") or "").strip()
-            if body.get("ai") and not note:
-                note = "Распознай чертёж полностью: какая это деталь, все размеры, отверстия, пазы, сечения."
-            if note:
-                # the user wrote a comment: the language model reads the drawing too, sees what the
-                # program found, and the two readings are compared before anything is built
-                async for ev in _crosscheck(a, src, note, settings, skip0):
-                    yield ev
-            yield _ev("analysis", **_analysis_view(a))
-            return
-        # a body of revolution drawn as one longitudinal section: axis + hatched metal on both sides
-        rev = None
-        by_area = sorted(range(len(views)), key=lambda i: -(views[i]["box"][2] - views[i]["box"][0]) *
-                         (views[i]["box"][3] - views[i]["box"][1]))
-        for i in [j for j in by_area if j not in skip0][:3]:
-            vpath = _upload_path(views[i]["url"])
-            if await anyio.to_thread.run_sync(revolve.has_axis, vpath):
-                # telling the outline from the hatching needs more pixels than the page was rendered
-                # with: a PDF page is rendered again, finely, and the view cut out of it
-                fine = await anyio.to_thread.run_sync(_fine_view, src, views[i]["box"], i)
-                det = await anyio.to_thread.run_sync(revolve.detect, fine or vpath)
-                if det:
-                    rev = {"view": i, "path": fine or vpath, **det}
-                    break
-        note = body.get("note", "")
-        if rev:
-            yield _ev("stage", text="Похоже на тело вращения: продольный разрез с осью. Профиль возьму с разреза…")
-            note = (note + " " if note else "") + ("Деталь — тело вращения, изображение " + str(rev["view"] + 1) +
-                                                  " — продольный разрез: Ø — диаметры (axis=diameter), длины вдоль оси — "
-                                                  "axis=length, общая длина детали — overall.")
-        # views the user excluded are not shown to the model at all; the others keep their numbers
-        crops = [(k + 1, _scaled_part(_upload_path(v["url"]))["url"]) for k, v in enumerate(views) if k not in skip0]
-        # the whole sheet only when no views were found: every picture costs context in small models
-        sheet = _scaled_part(src, 1024)["url"] if not views else None
-        msgs = drawing.reading_messages(crops, sheet, note)
-        shown = f"Видов найдено: {len(views)}" + (f", исключено вами: {len(skip0 & set(range(len(views))))}" if skip0 else "")
-        yield _ev("stage", text=f"{shown}. Модель {settings['model']} читает размеры…")
-        msg = None
-        fmt = {"type": "json_schema", "json_schema": {"name": "drawing", "schema": drawing.READ_DIMS_SCHEMA}}
-        reading, last_error = None, ""
-        # 1st try: strict JSON schema. Reasoning models (Nemotron) sometimes leave the answer empty or
-        # put the JSON into their reasoning under a schema — so the reasoning is searched too, and
-        # a 2nd try asks for plain JSON text without the schema.
-        for attempt, rf in enumerate((fmt, None), 1):
-            msg = None
-            try:
-                # reading numbers needs little thought: cap runaway reasoning (~7 000 tokens)
-                async for kind, data in llm_stream(settings, msgs, None, rf, max_reasoning_chars=25000):
-                    if kind == "progress":
-                        yield _ev("progress", step=attempt, **data)
-                    else:
-                        msg = data
-            except Exception as e:  # noqa: BLE001
-                last_error = str(e)
-                if re.search(r"context|остановлено|рассуждает", last_error, re.I):
-                    break
-                continue
-            for text in (msg["content"], msg.get("reasoning", "")):
-                try:
-                    reading = drawing.parse_reading(text)
-                    break
-                except ValueError:
-                    continue
-            log_call("read_drawing_raw", json.dumps({"image": body["image"], "attempt": attempt}),
-                     (msg["content"] or "")[-1500:] + " | REASONING: " + (msg.get("reasoning") or "")[-500:],
-                     reading is None)
-            if reading is not None:
-                break
-            last_error = "модель не вернула JSON"
-            yield _ev("stage", text="Модель ответила не в нужном формате, прошу ещё раз…")
-        if reading is None and rev:
-            # the shape comes from the picture anyway: without the model only the overall length is
-            # missing, and the user can type it
-            yield _ev("stage", text=f"Модель не прочитала размеры ({last_error}). Форма тела вращения снята с "
-                                    "разреза — впишите общую длину детали в таблицу.")
-            reading = {"views": [], "features": [], "overall": {}, "dimensions": [
-                {"id": "L", "value": 0, "view": "", "meaning": "общая длина детали вдоль оси (впишите)",
-                 "axis": "length", "overall": True, "confidence": 0.0}]}
-        if reading is None:
-            hint = (" Модель загружена в LM Studio с маленьким контекстом: увеличьте Context Length "
-                    "(16384 и больше) и повторите." if re.search(r"context", last_error, re.I) else
-                    " Выберите в Настройках → «Модель для разбора чертежей» быструю модель с поддержкой "
-                    "изображений, например google/gemma-4-e4b: она читает чертёж за 1–2 минуты.")
-            yield _ev("error", text=f"Не удалось прочитать чертёж: {last_error}.{hint}")
-            return
+    global stop_requested
+    stop_requested = False
+    settings = _drawing_settings()
+    try:
+        src = _upload_path(body["image"])
+    except (KeyError, ValueError) as e:
+        yield _ev("error", text=str(e))
+        return
+    folder = os.path.dirname(src)
+    uid = os.path.basename(folder)
+    stem = os.path.splitext(os.path.basename(src))[0]
+    await anyio.to_thread.run_sync(_refresh_vector, folder)
+    vec = _vector_meta(src)
+    if vec and vec.get("steel"):
+        # steel detail: profile from the specification, cuts and holes from the views — no model
+        st = vec["steel"]
         aid = uuid.uuid4().hex[:12]
-        reading = _mark_excluded(reading, exclude)
-        a = {"id": aid, "views": [v["url"] for v in views], "boxes": [v["box"] for v in views], "reading": reading,
-             "values": {d["id"]: d["value"] for d in reading.get("dimensions", [])}, "revolve": rev,
-             "note": note}
+        reading = _mark_excluded(steel.reading(st), exclude)
+        a = {"id": aid, "views": [f"/uploads/{uid}/{f}" for f in vec["steel_views"]], "boxes": None,
+             "reading": reading, "values": {d["id"]: d["value"] for d in reading["dimensions"]},
+             "vector": vec, "steel": st}
         analyses[aid] = a
-        log_call("read_drawing", json.dumps({"image": body["image"]}), json.dumps(reading, ensure_ascii=False), False)
-        yield _ev("stage", text="Снимаю геометрию с видов…")
+        a["sheet"] = body["image"]
+        prof = st["spec"]["profile"]
+        yield _ev("stage", text=f"Чертёж металлоконструкции: {prof['name']}, размеры из спецификации и видов…")
         await anyio.to_thread.run_sync(_geometry, a)
         yield _ev("analysis", **_analysis_view(a))
+        return
+    yield _ev("stage", text="Вырезаю виды с листа…")
+    if vec and vec.get("views"):
+        # vector: the views were found in the geometry itself when the file was loaded
+        views = [{"url": f"/uploads/{uid}/{v['file']}", "box": v["box"]} for v in vec["views"]]
+    else:
+        views = await anyio.to_thread.run_sync(drawing.segment_views, src, folder)
+        for v in views:  # unique names per source page
+            new = f"{stem}_{v['file']}"
+            os.replace(os.path.join(folder, v["file"]), os.path.join(folder, new))
+            v["url"] = f"/uploads/{uid}/{new}"
+    if not vec:
+        # a part from a rolled profile (the title block names it: «Труба 50х50х3 ГОСТ 8639-82»):
+        # the section is the profile, the length, ends, holes and slots come from the views
+        yield _ev("stage", text="Читаю штамп и размеры на листе…")
+        words = await anyio.to_thread.run_sync(profile_raster.ocr, src)
+        lines = profile_raster.lines_of(words)
+        try:
+            res = await anyio.to_thread.run_sync(lambda: profile_raster.plan(src, lines=lines, ocr_words=words))
+        except Exception as e:  # noqa: BLE001
+            res = None
+            print("profile part:", e, flush=True)
+        if res:
+            aid = uuid.uuid4().hex[:12]
+            reading = _mark_excluded(profile_raster.reading(res), exclude)
+            # the long views are faces of the part: the first one is the main view, the next the top
+            longs = [tuple(c) for c in res["longs"]]
+            names = {}
+            for i, v in enumerate(views):
+                core = tuple(v.get("core") or ())
+                if core in longs and longs.index(core) < 2:
+                    names[i + 1] = ("главный", "сверху")[longs.index(core)]
+            reading["views"] = [{"image": i, "name": n} for i, n in sorted(names.items())]
+            if res.get("mass"):
+                reading["mass_kg"] = res["mass"]
+            a = {"id": aid, "views": [v["url"] for v in views], "boxes": [v["box"] for v in views],
+                 "cores": [v.get("core") for v in views],
+                 "reading": reading, "values": {d["id"]: d["value"] for d in reading["dimensions"]},
+                 "profile": {"path": src, "lines": lines}}
+            analyses[aid] = a
+            a["sheet"] = body["image"]
+            yield _ev("stage", text=f"Деталь из проката: {res['stock']['name']}, длина {res['length']:g} мм. "
+                                    "Снимаю торцы, отверстия и пазы с видов…")
+            await anyio.to_thread.run_sync(_geometry, a)
+            yield _ev("analysis", **_analysis_view(a))
+            return
+    if vec:
+        # vector drawing: the numbers are text in the file and the scale is exact — no model needed
+        aid = uuid.uuid4().hex[:12]
+        boxes = [v["box"] for v in views]
+        reading = _mark_excluded(_vector_reading(vec, [_upload_path(v["url"]) for v in views], boxes, skip0),
+                                 exclude)
+        a = {"id": aid, "views": [v["url"] for v in views], "boxes": boxes, "reading": reading,
+             "values": {d["id"]: d["value"] for d in reading["dimensions"]}, "vector": vec}
+        analyses[aid] = a
+        a["sheet"] = body["image"]
+        yield _ev("stage", text="Векторный чертёж: размеры взяты из файла. Снимаю геометрию с видов…")
+        await anyio.to_thread.run_sync(_geometry, a)
+        note = (body.get("note") or "").strip()
+        if body.get("ai") and not note:
+            note = "Распознай чертёж полностью: какая это деталь, все размеры, отверстия, пазы, сечения."
+        if note:
+            # the user wrote a comment: the language model reads the drawing too, sees what the
+            # program found, and the two readings are compared before anything is built
+            async for ev in _crosscheck(a, src, note, settings, skip0):
+                yield ev
+        yield _ev("analysis", **_analysis_view(a))
+        return
+    if body.get("batch"):
+        yield _ev("error", text="Размеры этого чертежа читает модель ИИ: откройте его в окне проверки по одному")
+        return
+    # a body of revolution drawn as one longitudinal section: axis + hatched metal on both sides
+    rev = None
+    by_area = sorted(range(len(views)), key=lambda i: -(views[i]["box"][2] - views[i]["box"][0]) *
+                     (views[i]["box"][3] - views[i]["box"][1]))
+    for i in [j for j in by_area if j not in skip0][:3]:
+        vpath = _upload_path(views[i]["url"])
+        if await anyio.to_thread.run_sync(revolve.has_axis, vpath):
+            # telling the outline from the hatching needs more pixels than the page was rendered
+            # with: a PDF page is rendered again, finely, and the view cut out of it
+            fine = await anyio.to_thread.run_sync(_fine_view, src, views[i]["box"], i)
+            det = await anyio.to_thread.run_sync(revolve.detect, fine or vpath)
+            if det:
+                rev = {"view": i, "path": fine or vpath, **det}
+                break
+    note = body.get("note", "")
+    if rev:
+        yield _ev("stage", text="Похоже на тело вращения: продольный разрез с осью. Профиль возьму с разреза…")
+        note = (note + " " if note else "") + ("Деталь — тело вращения, изображение " + str(rev["view"] + 1) +
+                                              " — продольный разрез: Ø — диаметры (axis=diameter), длины вдоль оси — "
+                                              "axis=length, общая длина детали — overall.")
+    # views the user excluded are not shown to the model at all; the others keep their numbers
+    crops = [(k + 1, _scaled_part(_upload_path(v["url"]))["url"]) for k, v in enumerate(views) if k not in skip0]
+    # the whole sheet only when no views were found: every picture costs context in small models
+    sheet = _scaled_part(src, 1024)["url"] if not views else None
+    msgs = drawing.reading_messages(crops, sheet, note)
+    shown = f"Видов найдено: {len(views)}" + (f", исключено вами: {len(skip0 & set(range(len(views))))}" if skip0 else "")
+    yield _ev("stage", text=f"{shown}. Модель {settings['model']} читает размеры…")
+    msg = None
+    fmt = {"type": "json_schema", "json_schema": {"name": "drawing", "schema": drawing.READ_DIMS_SCHEMA}}
+    reading, last_error = None, ""
+    # 1st try: strict JSON schema. Reasoning models (Nemotron) sometimes leave the answer empty or
+    # put the JSON into their reasoning under a schema — so the reasoning is searched too, and
+    # a 2nd try asks for plain JSON text without the schema.
+    for attempt, rf in enumerate((fmt, None), 1):
+        msg = None
+        try:
+            # reading numbers needs little thought: cap runaway reasoning (~7 000 tokens)
+            async for kind, data in llm_stream(settings, msgs, None, rf, max_reasoning_chars=25000):
+                if kind == "progress":
+                    yield _ev("progress", step=attempt, **data)
+                else:
+                    msg = data
+        except Exception as e:  # noqa: BLE001
+            last_error = str(e)
+            if re.search(r"context|остановлено|рассуждает", last_error, re.I):
+                break
+            continue
+        for text in (msg["content"], msg.get("reasoning", "")):
+            try:
+                reading = drawing.parse_reading(text)
+                break
+            except ValueError:
+                continue
+        log_call("read_drawing_raw", json.dumps({"image": body["image"], "attempt": attempt}),
+                 (msg["content"] or "")[-1500:] + " | REASONING: " + (msg.get("reasoning") or "")[-500:],
+                 reading is None)
+        if reading is not None:
+            break
+        last_error = "модель не вернула JSON"
+        yield _ev("stage", text="Модель ответила не в нужном формате, прошу ещё раз…")
+    if reading is None and rev:
+        # the shape comes from the picture anyway: without the model only the overall length is
+        # missing, and the user can type it
+        yield _ev("stage", text=f"Модель не прочитала размеры ({last_error}). Форма тела вращения снята с "
+                                "разреза — впишите общую длину детали в таблицу.")
+        reading = {"views": [], "features": [], "overall": {}, "dimensions": [
+            {"id": "L", "value": 0, "view": "", "meaning": "общая длина детали вдоль оси (впишите)",
+             "axis": "length", "overall": True, "confidence": 0.0}]}
+    if reading is None:
+        hint = (" Модель загружена в LM Studio с маленьким контекстом: увеличьте Context Length "
+                "(16384 и больше) и повторите." if re.search(r"context", last_error, re.I) else
+                " Выберите в Настройках → «Модель для разбора чертежей» быструю модель с поддержкой "
+                "изображений, например google/gemma-4-e4b: она читает чертёж за 1–2 минуты.")
+        yield _ev("error", text=f"Не удалось прочитать чертёж: {last_error}.{hint}")
+        return
+    aid = uuid.uuid4().hex[:12]
+    reading = _mark_excluded(reading, exclude)
+    a = {"id": aid, "views": [v["url"] for v in views], "boxes": [v["box"] for v in views], "reading": reading,
+         "values": {d["id"]: d["value"] for d in reading.get("dimensions", [])}, "revolve": rev,
+         "note": note}
+    analyses[aid] = a
+    a["sheet"] = body["image"]
+    log_call("read_drawing", json.dumps({"image": body["image"]}), json.dumps(reading, ensure_ascii=False), False)
+    yield _ev("stage", text="Снимаю геометрию с видов…")
+    await anyio.to_thread.run_sync(_geometry, a)
+    yield _ev("analysis", **_analysis_view(a))
 
-    return StreamingResponse(_guarded(run(), body), media_type="application/x-ndjson")
 
 
 def _apply_edits(a: dict, body: dict) -> None:
@@ -3193,14 +3357,23 @@ async def _drawing_preview(request: Request):
     a = analyses.get(body.get("id"))
     if a is None:
         return JSONResponse({"error": "Разбор не найден, начните заново"}, status_code=404)
+    return JSONResponse(await _preview(a, body))
+
+
+async def _preview(a: dict, body: dict, projections: bool = True) -> dict:
+    """Builds the part from the analysis with the user's corrections (values, feature table) and
+    checks it against the drawing: overall sizes, the title block's mass, KOMPAS errors."""
     _apply_edits(a, body)
+    if isinstance(body.get("features"), dict):
+        a["feature_edits"] = body["features"]
     await anyio.to_thread.run_sync(_geometry, a)
     out = _analysis_view(a)
     try:
         ops = drawing.resolve_plan(a["reading"]["plan"]["operations"], a["values"])
+        ops = _apply_feature_edits(ops, a.get("feature_edits") or {})
     except (ValueError, KeyError) as e:
         out["build"] = {"error": str(e)}
-        return JSONResponse(out)
+        return out
     # a cut that KOMPAS refuses is skipped and named in the result, the rest of the part is built
     text, images, err = await bridge.call("build_part", {"operations": ops, "name": a["reading"].get("title") or "По чертежу",
                                                        "screenshot": False, "keep_going": True})
@@ -3225,11 +3398,68 @@ async def _drawing_preview(request: Request):
             if abs(diff) > 0.05 * float(mass):
                 out["issues"].append({"level": "warning", "dims": [],
                                       "text": f"Масса модели {out['build']['mass_g'] / 1000:.3f} кг, в штампе {mass} кг"})
-        ptext, pimages, perr = await bridge.call("projections", {})
-        if not perr:
-            out["projections"] = dict(zip(json.loads(ptext), pimages))
+        if projections:
+            ptext, pimages, perr = await bridge.call("projections", {})
+            if not perr:
+                out["projections"] = dict(zip(json.loads(ptext), pimages))
     a["last_build"] = out.get("build")
-    return JSONResponse(out)
+    return out
+
+
+async def drawing_view(request: Request):
+    """An analysis made earlier (by the batch) for the review window, with its last build."""
+    body = await request.json()
+    a = analyses.get(body.get("id"))
+    if a is None:
+        return JSONResponse({"error": "Разбор не найден, начните заново"}, status_code=404)
+    return JSONResponse({**_analysis_view(a), "build": a.get("last_build")})
+
+
+async def drawing_batch(request: Request):
+    """Many drawings one after another, without the language model: each is recognised, built,
+    checked (mass against the title block, KOMPAS errors), optionally saved as .m3d and .step to
+    the output folder, and closed. Streams one row per drawing."""
+    body = await request.json()
+    items = [x for x in body.get("items") or [] if isinstance(x, dict) and x.get("image")]
+    save = bool(body.get("save"))
+
+    async def run():
+        global stop_requested
+        for i, it in enumerate(items):
+            if stop_requested:
+                yield _ev("row", i=i, status="stopped", text="остановлено")
+                break
+            name = it.get("name") or f"чертёж {i + 1}"
+            yield _ev("row", i=i, status="work", text="распознаю…")
+            a, err = None, None
+            async for ev in _analyze_events({"image": it["image"], "batch": True}):
+                d = json.loads(ev)
+                if d.get("type") == "analysis":
+                    a = analyses.get(d["id"])
+                elif d.get("type") == "error":
+                    err = d.get("text")
+                elif d.get("type") == "stage":
+                    yield _ev("row", i=i, status="work", text=d.get("text", ""))
+            if a is None or (a.get("geometry") or {}).get("error"):
+                yield _ev("row", i=i, status="error", text=err or (a or {}).get("geometry", {}).get("error")
+                          or "не распознан", id=a and a["id"])
+                continue
+            yield _ev("row", i=i, status="work", text="строю…", id=a["id"], recognised=_part_kind(a))
+            out = await _preview(a, {}, projections=False)
+            b = out.get("build") or {}
+            saved = []
+            if save and not b.get("error") and b.get("volume_mm3"):
+                stem = re.sub(r'[\\/:*?"<>|]+', "_", os.path.splitext(name)[0]).strip() or f"part{i + 1}"
+                for ext, tool in (("m3d", "save"), ("step", "export")):
+                    text, _, e2 = await bridge.call(tool, {"path": f"{stem}.{ext}"})
+                    if not e2:
+                        saved.append(json.loads(text).get("saved") or json.loads(text).get("exported"))
+            await bridge.call("close_document", {})
+            yield _ev("row", i=i, status="done", id=a["id"], recognised=_part_kind(a), build=b,
+                      mass_stamp=a["reading"].get("mass_kg"), saved=saved,
+                      issues=[x["text"] for x in out.get("issues", []) if x.get("level") == "error"])
+        yield _ev("done")
+    return StreamingResponse(_guarded(run(), body), media_type="application/x-ndjson")
 
 
 async def drawing_accept(request: Request):
@@ -3282,6 +3512,8 @@ app = Starlette(routes=[
     Route("/api/drawing/preview", drawing_preview, methods=["POST"]),
     Route("/api/drawing/replan", drawing_replan, methods=["POST"]),
     Route("/api/drawing/accept", drawing_accept, methods=["POST"]),
+    Route("/api/drawing/view", drawing_view, methods=["POST"]),
+    Route("/api/drawing/batch", drawing_batch, methods=["POST"]),
     Route("/uploads/{uid}/{name}", uploaded_file),
 ], lifespan=lifespan)
 

@@ -27,8 +27,9 @@ failed = []
 for n in names:
     t0 = time.time()
     src = os.path.join(FOLDER, n + ".png")
-    lines = profile_raster.ocr_lines(src)
-    res = profile_raster.plan(src, lines=lines)
+    words = profile_raster.ocr(src)
+    lines = profile_raster.lines_of(words)
+    res = profile_raster.plan(src, lines=lines, ocr_words=words)
     if not res:
         print(n, "NO PLAN")
         failed.append(n)
@@ -39,8 +40,14 @@ for n in names:
     app._geometry(a)
     ops = a["reading"]["plan"]["operations"]
     issues = [i for i in drawing.check(a["reading"], a["values"]) if i["level"] == "error"]
-    print(n, res["stock"]["name"], "L", res["length"], "ops", len(ops), f"{time.time() - t0:.1f} s", issues or "")
-    if res["stock"]["a"] != 50 or res["stock"]["t"] != 3 or abs(res["length"] - L) > 0.01 or issues:
+    # the review window's data: one feature row per operation, every hole / slot / end marked on the sheet
+    view = app._analysis_view(a)
+    marked = {m["op"] for m in res["marks"] if m.get("op") is not None}
+    far = sum("дальней стенке" in o.get("comment", "") for o in ops)
+    print(n, res["stock"]["name"], "L", res["length"], "ops", len(ops), "mass in stamp", res["mass"],
+          f"{time.time() - t0:.1f} s", issues or "")
+    if res["stock"]["a"] != 50 or res["stock"]["t"] != 3 or abs(res["length"] - L) > 0.01 or issues \
+            or res["mass"] != mass or len(view["features"]) != len(ops) or len(marked) + 1 + far != len(ops):
         failed.append(n)
         continue
     if "--build" in sys.argv:

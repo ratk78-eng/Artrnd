@@ -16,6 +16,7 @@ What a KOMPAS / Tekla / SOLIDWORKS sheet of such a part shows, and how it is rea
 The plan is for build_part: X along the part, the profile in the YZ plane."""
 from __future__ import annotations
 
+import contextlib
 import math
 import os
 import re
@@ -37,6 +38,18 @@ _TUBE = re.compile(r"(\d+(?:[.,]\d+)?)\s*[хxХX×]\s*(\d+(?:[.,]\d+)?)\s*[хxХ
 def ocr_lines(path: str, box=None) -> list[str]:
     """Text lines of the picture (or a part of it) by Windows' built-in OCR (Windows.Media.Ocr;
     nothing to install, nothing leaves the computer). [] when it is not available."""
+    return lines_of(ocr(path, box))
+
+
+def lines_of(words: list[dict]) -> list[str]:
+    out: dict[int, list[str]] = {}
+    for w in words:
+        out.setdefault(w["line"], []).append(w["text"])
+    return [" ".join(v) for _, v in sorted(out.items())]
+
+
+def ocr(path: str, box=None) -> list[dict]:
+    """The words OCR finds: {text, x, y, w, h, line} in pixels of the picture."""
     src = path
     if box:
         tmp = os.path.join(os.environ.get("TEMP", "."), "kompasmcp_ocr.png")
@@ -51,10 +64,35 @@ def ocr_lines(path: str, box=None) -> list[str]:
                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except Exception:  # noqa: BLE001
             continue
-        lines = [ln.split("\t")[0] for ln in (r.stdout or "").splitlines() if ln and not ln.startswith("#")]
-        if lines:
-            return lines
+        words = []
+        for ln in (r.stdout or "").splitlines():
+            p = ln.split("\t")
+            if len(p) == 6 and not ln.startswith("#"):
+                with contextlib.suppress(ValueError):
+                    words.append({"text": p[0], "x": int(p[1]), "y": int(p[2]), "w": int(p[3]), "h": int(p[4]),
+                                  "line": int(p[5])})
+        if words:
+            return words
     return []
+
+
+def stamp_mass(words: list[dict], glyph_words: list[dict] | None = None) -> float | None:
+    """The mass in the title block, kg: the number in the cell under the word «Масса» (OCR; a
+    lone digit OCR skips is taken from rastertext's words, glyph_words)."""
+    num = re.compile(r"^\d+(?:[.,]\d+)?$")
+    for m in (w for w in words if re.fullmatch(r"[МM]асса", w["text"], re.I)):
+        cx = m["x"] + m["w"] / 2
+        below = lambda y: m["y"] + 0.5 * m["h"] < y < m["y"] + 5 * m["h"]  # noqa: E731
+        cand = [w for w in words if num.match(w["text"]) and below(w["y"]) and abs(w["x"] + w["w"] / 2 - cx) < 1.2 * m["w"]]
+        if cand:
+            best = min(cand, key=lambda w: w["y"])
+            with contextlib.suppress(ValueError):
+                return float(best["text"].replace(",", "."))
+        for g in sorted(glyph_words or [], key=lambda g: g["y0"]):
+            n = rt.number_of(g)
+            if n and not g["vertical"] and below(g["y0"]) and abs((g["x0"] + g["x1"]) / 2 - cx) < 1.2 * m["w"]:
+                return n["value"]
+    return None
 
 
 def stock(lines: list[str]) -> dict | None:
@@ -199,7 +237,8 @@ def _features(main: np.ndarray, box, scale: float, lw: int = 3) -> list[dict]:
             raw = main[y0 + c["y0"]:y0 + c["y1"], x0 + c["x0"]:x0 + c["x1"]] & reg
             px, py = raw.sum(axis=0), raw.sum(axis=1)
             def mid(p):    # the line's middle: the centroid of its strong columns
-                q = np.where(p >= 0.3 * p.max(), p, 0).astype(float)
+                # (well above the other two sides' share: on a narrow slot they come close)
+                q = np.where(p >= 0.6 * p.max(), p, 0).astype(float)
                 return float((q * np.arange(len(q))).sum() / max(1.0, q.sum()))
             w, h = bw - lw, bh - lw
             if bw > 6:
@@ -223,16 +262,31 @@ def _features(main: np.ndarray, box, scale: float, lw: int = 3) -> list[dict]:
 def _envelope(main: np.ndarray, box, xa: int, xb: int):
     """Top and bottom of the outline in each column xa…xb of a view (sheet px), None where empty."""
     x0, y0, x1, y1 = box
+    # closed along x first: a thin black line drawn over a main line (an extension line over the
+    # end) leaves a gap in it
+    r = 3
+    a0 = max(0, xa - 2 * r)
+    m = main[y0 - 3:y1 + 3, a0:xb + 2 * r]
+    n = m.shape[1]
+    dil = np.zeros_like(m)
+    for k in range(-r, r + 1):
+        dil[:, max(0, k):n + min(0, k)] |= m[:, max(0, -k):n - max(0, k)]
+    ero = dil.copy()
+    for k in range(-r, r + 1):
+        sh = np.zeros_like(dil)
+        sh[:, max(0, k):n + min(0, k)] = dil[:, max(0, -k):n - max(0, k)]
+        ero &= sh
+    closed = ero | m
     out = []
     for x in range(xa, xb):
-        col = main[y0 - 3:y1 + 3, x]
+        col = closed[:, x - a0]
         ys = np.nonzero(col)[0]
         out.append((x, (y0 - 3 + ys.min(), y0 - 3 + ys.max()) if len(ys) else None))
     return out
 
 
 def plan(path: str, views: list[dict] | None = None, lines: list[str] | None = None,
-         length: float | None = None) -> dict | None:
+         length: float | None = None, ocr_words: list[dict] | None = None) -> dict | None:
     """The build plan for a profile part drawn on the picture, or None when the sheet names no
     profile or shows no long view. {operations, notes, questions, stock, length}.
     length: the part's length as the user confirmed it (else the dimension read)."""
@@ -268,15 +322,26 @@ def plan(path: str, views: list[dict] | None = None, lines: list[str] | None = N
     allnums = [{"value": n["value"]} for n in (rt.number_of(w) for w in words) if n and n["value"] > 0] + dims
     notes = [f"Заготовка — {st['name']} (по штампу); сечение по ГОСТ: R наружный {2 * t:g}, внутренний {t:g}"]
     questions = []
+    # what was found where on the sheet (px), for the review window: views, dimensions, features
+    marks = [{"kind": "view", "box": [int(v) for v in c],
+              "label": (f"вид {longs.index(c) + 1}" if c in longs else "сечение / другой вид")} for c in cores]
+    for d in dims:
+        w = d["word"]
+        if d["vertical"]:
+            box = [min(w["x0"], d["line"]), d["a"], max(w["x1"], d["line"]), d["b"]]
+        else:
+            box = [d["a"], min(w["y0"], d["line"]), d["b"], max(w["y1"], d["line"])]
+        marks.append({"kind": "dim", "box": [int(v) for v in box], "label": f"{d['prefix']}{d['value']:g}",
+                      "text": [int(w["x0"]), int(w["y0"]), int(w["x1"]), int(w["y1"])]})
     # the length: the longest dimension along a long view spanning (nearly) all of it
-    L = None
+    L, Ldim = None, None
     for dm in sorted(dims, key=lambda d: -d["value"]):
         if dm["vertical"]:
             continue
         for c in longs:
             if dm["a"] <= c[0] + 0.03 * (c[2] - c[0]) and dm["b"] >= c[2] - 0.03 * (c[2] - c[0]) \
                     and c[1] - 0.6 * (c[2] - c[0]) < dm["line"] < c[3] + 0.6 * (c[2] - c[0]):
-                L = dm["value"]
+                L, Ldim = dm["value"], dm
                 break
         if L:
             break
@@ -285,6 +350,11 @@ def plan(path: str, views: list[dict] | None = None, lines: list[str] | None = N
     if not L:
         return None
     notes.append(f"Длина {L:g} мм" + (" — по размеру на виде" if not length else ""))
+    if Ldim is not None:
+        lt = [int(Ldim["word"][q]) for q in ("x0", "y0", "x1", "y1")]
+        for mk in marks:
+            if mk["kind"] == "dim" and mk["text"] == lt:
+                mk["dim_id"] = "L"
     ops = [{"op": "extrude", "plane": "YZ", "offset": 0, "depth": L, "shapes": tube_section(a, b, t),
             "comment": f"{st['name']}, длина {L:g}"}]
     # each long view: a face of the tube; going down the sheet the faces turn round the axis
@@ -354,8 +424,19 @@ def plan(path: str, views: list[dict] | None = None, lines: list[str] | None = N
             if len(shape_pts) < 3:
                 continue
             depth_in = abs(shape_pts[-1][0] - (0 if end == 0 else L))
-            if all(p[2] - p[1] >= 0.97 * side for p in shape_pts[1:]) or depth_in < 0.5:
+            # (the end line's own first pixels are left out: its rounded caps and an extension
+            # line drawn over it make them look short)
+            if all(p[2] - p[1] >= 0.97 * side for p in shape_pts[min(len(shape_pts) - 1, lw + 2):]) or depth_in < 0.5:
                 continue                                    # a square end
+            # the material reaches the part's end exactly (the end line's middle is the end)
+            if os.environ.get("PROFILE_DEBUG"):
+                print("   end", end, [tuple(round(float(v), 2) for v in p) for p in shape_pts[::max(1, len(shape_pts) // 12)]],
+                      flush=True)
+            # (an extension line drawn over the end line hides its outer pixels)
+            e_x = 0.0 if end == 0 else L
+            gap = shape_pts[0][0] - e_x if end == 0 else e_x - shape_pts[0][0]
+            if 0 < gap < 1.0:
+                shape_pts.insert(0, (e_x,) + tuple(shape_pts[0][1:]))
             # what is cut: the box over the end piece minus the material — round its outline:
             # out along the bottom edge from the inner end to the part's end, back along the top
             ext = -1.0 if end == 0 else L + 1.0
@@ -364,6 +445,9 @@ def plan(path: str, views: list[dict] | None = None, lines: list[str] | None = N
             top = [(p[0], min(side, p[2]) if p[2] < 0.98 * side else side) for p in shape_pts]
             region = [(ext, -1.0), (inner, -1.0), (inner, 0.0)] + bot[::-1] + top + [(inner, side), (inner, side + 1.0), (ext, side + 1.0)]
             region = _simplify(region)
+            xs = [x for x, _ in cols[:len(shape_pts)]]
+            marks.append({"kind": "end", "box": [int(min(xs)), int(y0), int(max(xs)), int(y1)], "op": len(ops),
+                          "label": f"торец {'левый' if end == 0 else 'правый'}"})
             ops.append({"op": "cut", "plane": plane, "offset": -1, "through_all": True,
                         "shapes": [_face_poly(region, plane, sign, side)],
                         "comment": f"торец {'левый' if end == 0 else 'правый'} по виду {k + 1}"})
@@ -375,11 +459,14 @@ def plan(path: str, views: list[dict] | None = None, lines: list[str] | None = N
                 questions.append(f"Вид {k + 1}: элемент у X≈? (за разрывом, размеров к нему не нашлось) — пропущен")
                 continue
             zc = (y1 - lw / 2 - f["cy"]) / s
+            hw, hh = (f["d"] / 2, f["d"] / 2) if f["kind"] == "circle" else (f["w"] / 2, f["h"] / 2)
+            fbox = [int(f["cx"] - hw - lw), int(f["cy"] - hh - lw), int(f["cx"] + hw + lw), int(f["cy"] + hh + lw)]
             if os.environ.get("PROFILE_DEBUG"):
                 print("   feature", f["kind"], {q: round(v / s, 2) for q, v in f.items() if q in ("d", "inner", "w", "h") and v},
                       "x", round(xm, 2), flush=True)
             if f["kind"] == "circle":
                 dmm = _snap(f["d"] / s, allnums)
+                marks.append({"kind": "hole", "box": fbox, "op": len(ops), "label": f"Ø{dmm:g}"})
                 ops.append({"op": "cut", "plane": plane, "offset": near,
                             "depth": t + 1.5, "shapes": [_face_circle(xm, zc, dmm, plane, sign, side)],
                             "comment": f"отверстие Ø{dmm:g} в стенке, вид {k + 1}, X {xm:.1f}"})
@@ -390,12 +477,30 @@ def plan(path: str, views: list[dict] | None = None, lines: list[str] | None = N
                                 "comment": f"отверстие Ø{di:g} в дальней стенке, вид {k + 1}, X {xm:.1f}"})
             else:
                 wmm, hmm = _snap(f["w"] / s, allnums), _snap(f["h"] / s, allnums)
+                marks.append({"kind": "slot", "box": fbox, "op": len(ops), "label": f"паз {wmm:g}×{hmm:g}"})
                 ops.append({"op": "cut", "plane": plane, "offset": near,
                             "depth": t + 1.5,
                             "shapes": [_face_poly([(xm - wmm / 2, zc - hmm / 2), (xm + wmm / 2, zc - hmm / 2),
                                                    (xm + wmm / 2, zc + hmm / 2), (xm - wmm / 2, zc + hmm / 2)], plane, sign, side)],
                             "comment": f"паз {wmm:g}×{hmm:g} в стенке, вид {k + 1}, X {xm:.1f}"})
-    return {"operations": ops, "notes": notes, "questions": questions, "stock": st, "length": L}
+    return {"operations": ops, "notes": notes, "questions": questions, "stock": st, "length": L, "marks": marks,
+            "longs": [[int(v) for v in c] for c in longs],
+            "mass": _plausible_mass(stamp_mass(ocr_words, words) if ocr_words else None, a, b, t, L),
+            "size": [int(img.shape[1]), int(img.shape[0])]}
+
+
+def _plausible_mass(m: float | None, a: float, b: float, t: float, L: float) -> float | None:
+    """The title block's mass against the blank's (steel, the tube's section × length): OCR now and
+    then loses the comma («4,02» → 402, «0,64» → 64) — the decimal point goes where the number
+    makes sense (the part weighs 50…105 % of its blank), else the mass is not trusted."""
+    if not m:
+        return None
+    area = a * b - (a - 2 * t) * (b - 2 * t) - (4 - math.pi) * (2 * t) ** 2 + (4 - math.pi) * t ** 2
+    blank = area * L * 7.85e-6
+    for k in (1, 10, 100, 1000):
+        if 0.5 * blank <= m / k <= 1.05 * blank:
+            return round(m / k, 4)
+    return None
 
 
 def _snap(v: float, dims: list[dict]) -> float:
@@ -415,7 +520,9 @@ def _simplify(pts, closed=False, tol=0.15):
             (ax, ay), (bx, by) = out[-2], out[-1]
             L = math.hypot(p[0] - ax, p[1] - ay) or 1e-9
             dist = abs((p[0] - ax) * (by - ay) - (p[1] - ay) * (bx - ax)) / L
-            if dist < tol:
+            # a point where the outline turns back on itself (the tip of a spike) stays
+            ahead = (bx - ax) * (p[0] - bx) + (by - ay) * (p[1] - by) >= 0
+            if dist < tol and ahead:
                 out.pop()
             else:
                 break

@@ -194,6 +194,13 @@ async def export(path: str) -> dict:
 
 
 @mcp.tool()
+async def close_document() -> dict:
+    """Закрыть активный документ без сохранения (служебный: пакетная обработка чертежей)."""
+    await _run(_k.close_current)
+    return {"closed": True}
+
+
+@mcp.tool()
 async def set_view(view: Literal["iso", "front", "top", "left", "right", "back", "bottom"]) -> dict:
     """Повернуть 3D-модель в стандартную ориентацию."""
     await _run(_k.set_view, view)
