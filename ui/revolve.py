@@ -232,8 +232,11 @@ def flats(texts: str) -> list[dict]:
         rest = texts[m.end():m.end() + 80]
         d = re.search(r"(?:Ø|на\s*Ø?)\s*(\d+(?:[.,]\d+)?)", rest)
         ln = re.search(r"длин\w*\s*(\d+(?:[.,]\d+)?)", rest)
+        dv = d.group(1).replace(",", ".") if d else None
+        if dv and re.match(r"[03]\d\d[.]", dv):
+            dv = dv[1:]           # text recognition reads the sign Ø as 0 or 3: «на 312,93»
         out.append({"n": int(m.group(1)), "s": float(m.group(2).replace(",", ".")),
-                    "d": float(d.group(1).replace(",", ".")) if d else None,
+                    "d": float(dv) if dv else None,
                     "l": float(ln.group(1).replace(",", ".")) if ln else None})
     return out
 
@@ -246,7 +249,8 @@ def flat_cuts(profile_pts: list, flat: dict) -> list[dict]:
         return []
     runs, cur = [], None
     for (z0, r0), (z1, r1) in zip(profile_pts, profile_pts[1:]):
-        if abs(r0 - r) < 1e-6 and abs(r1 - r) < 1e-6 and z1 > z0:
+        # (within 0.06: the profile may have snapped to a near number of the table, Ø12,92 for 12,93)
+        if abs(r0 - r) < 0.06 and abs(r1 - r) < 0.06 and z1 > z0:
             cur = [cur[0], z1] if cur and abs(cur[1] - z0) < 1e-6 else [z0, z1]
             runs.append(cur)
     if not runs:

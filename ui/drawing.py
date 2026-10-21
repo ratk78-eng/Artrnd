@@ -8,6 +8,7 @@ field before anything is built.
 from __future__ import annotations
 
 import ast
+import contextlib
 import math
 import operator
 import os
@@ -610,6 +611,8 @@ def parse_reading(text: str) -> dict:
             if best is None or end - m.start() > best[1]:
                 best = (obj, end - m.start())
     if best is None:
+        best = (_salvage_dimensions(text or ""), 0)
+    if not best[0]:
         raise ValueError("модель не вернула JSON")
     data = best[0]
     dims = []
@@ -622,6 +625,39 @@ def parse_reading(text: str) -> dict:
         data["dimensions"] = dims
     data["views"] = _tidy_views(data.get("views"))
     return data
+
+
+def _salvage_dimensions(text: str) -> dict | None:
+    """A reply cut off in the middle (a small model copying a whole table of Ø into "dimensions"
+    runs out of tokens): every complete dimension object before the cut is kept, with the views
+    if they came first. None when there is nothing to keep."""
+    import json
+    m = re.search(r'"dimensions"\s*:\s*\[', text)
+    if not m:
+        return None
+    dec = json.JSONDecoder()
+    dims, i = [], m.end()
+    while True:
+        j = text.find("{", i)
+        if j < 0:
+            break
+        try:
+            obj, end = dec.raw_decode(text, j)
+        except json.JSONDecodeError:
+            break                                   # the cut-off object: stop here
+        if isinstance(obj, dict) and "value" in obj:
+            dims.append(obj)
+        i = end
+        if text[i:].lstrip().startswith("]"):
+            break
+    if not dims:
+        return None
+    out = {"dimensions": dims}
+    v = re.search(r'"views"\s*:\s*(\[[^\]]*\])', text[:m.start()])
+    if v:
+        with contextlib.suppress(json.JSONDecodeError):
+            out["views"] = json.loads(v.group(1))
+    return out
 
 
 def _tidy_views(views) -> list[dict]:

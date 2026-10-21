@@ -2727,13 +2727,21 @@ def _geometry_revolve(a: dict) -> None:
         ds = sorted({round(2 * r, 2) for _, r in res["bore"] if r > 0})
         notes.append("Внутри — сквозная расточка: Ø" + ", Ø".join(f"{v:g}" for v in ds))
     # flats «под ключ» named in the notes the model read (or the user's hint)
-    text = " ".join([a.get("note", "")] + [str(f) for f in rd.get("features", [])] +
+    # (the sheet's own text too, read by OCR: the model leaves the notes out now and then)
+    text = " ".join([a.get("note", ""), a.get("ocr_text", "")] + [str(f) for f in rd.get("features", [])] +
                     [str(d.get("meaning", "")) for d in dims])
+    done = set()
     for fl in revolve.flats(text):
+        key = (fl["n"], fl["s"], fl["d"])
+        if fl["d"] is None or key in done:
+            continue
+        done.add(key)
         cuts = revolve.flat_cuts(res["profile"], fl)
         if cuts:
             ops += cuts
             notes.append(f"{fl['n']} лыски S{fl['s']:g} на Ø{fl['d']:g}")
+        else:
+            notes.append(f"{fl['n']} лыски S{fl['s']:g} на Ø{fl['d']:g} не построены: на разрезе не найден участок Ø{fl['d']:g}")
     notes.append("Резьбы построены по наружному диаметру (условно, без витков)")
     a["geometry"] = {"notes": notes, "questions": [], "issues": []}
     R = a["reading"]
@@ -3266,7 +3274,7 @@ async def _analyze_events(body: dict):
     reading = _mark_excluded(reading, exclude)
     a = {"id": aid, "views": [v["url"] for v in views], "boxes": [v["box"] for v in views], "reading": reading,
          "values": {d["id"]: d["value"] for d in reading.get("dimensions", [])}, "revolve": rev,
-         "note": note}
+         "note": note, "ocr_text": " ".join(lines) if not vec else ""}
     analyses[aid] = a
     a["sheet"] = body["image"]
     log_call("read_drawing", json.dumps({"image": body["image"]}), json.dumps(reading, ensure_ascii=False), False)
@@ -3372,7 +3380,10 @@ async def _preview(a: dict, body: dict, projections: bool = True) -> dict:
         ops = drawing.resolve_plan(a["reading"]["plan"]["operations"], a["values"])
         ops = _apply_feature_edits(ops, a.get("feature_edits") or {})
     except (ValueError, KeyError) as e:
-        out["build"] = {"error": str(e)}
+        # no plan at all: why (the geometry's own message), not the bare missing key
+        g_err = (a.get("geometry") or {}).get("error")
+        out["build"] = {"error": g_err if isinstance(e, KeyError) and g_err else
+                        ("план детали не составлен" if isinstance(e, KeyError) else str(e))}
         return out
     # a cut that KOMPAS refuses is skipped and named in the result, the rest of the part is built
     text, images, err = await bridge.call("build_part", {"operations": ops, "name": a["reading"].get("title") or "По чертежу",

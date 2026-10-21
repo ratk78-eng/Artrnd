@@ -25,4 +25,16 @@ r = parse_reading('{"views":["главный","сверху"],"dimensions":[{"id
 assert r["views"] == [{"image": 1, "name": "главный"}, {"image": 2, "name": "сверху"}], r["views"]
 r = parse_reading('{"views":[{"image":"Изображение 3","name":"Слева"}, 7],"dimensions":[]}')
 assert r["views"] == [{"image": 3, "name": "слева"}], r["views"]
+# a reply cut off in the middle (Gemma copying the Штуцер's whole table): the complete rows stay
+cut = ('```json\n{"views": [{"image": 1, "name": "главный"}], "dimensions": [\n'
+       '{"id": "d1", "value": 41.56, "axis": "length", "overall": true},\n'
+       '{"id": "d2", "value": 19.14, "axis": "diameter", "overall": true},\n'
+       '{"id": "d_table_l10", "value": 1.9, "view": "v2", "meaning": "Длина ступ')
+r = parse_reading(cut)
+assert [d["value"] for d in r["dimensions"]] == [41.56, 19.14] and r["views"] == [{"image": 1, "name": "главный"}], r
+try:
+    parse_reading('{"dimensions": [{"id": "d1", "val')
+    raise AssertionError("nothing to keep must stay an error")
+except ValueError:
+    pass
 print("PARSE READING TEST PASSED")
