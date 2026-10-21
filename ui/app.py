@@ -34,6 +34,7 @@ import pdfvec
 import revolve
 import shaft
 import steel
+import profile_raster
 import vision
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -2619,6 +2620,19 @@ def _geometry(a: dict) -> None:
         a["geometry"] = {"notes": res["notes"], "questions": res["questions"], "issues": res["issues"]}
         a["reading"]["plan"] = {"operations": res["operations"], "source": "picture"}
         return
+    if a.get("profile"):
+        pf = a["profile"]
+        try:
+            res = profile_raster.plan(pf["path"], lines=pf["lines"], length=a["values"].get("L"))
+        except Exception as e:  # noqa: BLE001
+            res = None
+            print("profile part:", e, flush=True)
+        if not res:
+            a["geometry"] = {"error": "Не удалось составить деталь из проката по чертежу"}
+            return
+        a["geometry"] = {"notes": res["notes"], "questions": res["questions"], "issues": []}
+        a["reading"]["plan"] = {"operations": res["operations"], "source": "picture"}
+        return
     if a.get("revolve") and a["revolve"]["view"] not in skip:
         _geometry_revolve(a)
         return
@@ -2966,6 +2980,28 @@ async def drawing_analyze(request: Request):
                 new = f"{stem}_{v['file']}"
                 os.replace(os.path.join(folder, v["file"]), os.path.join(folder, new))
                 v["url"] = f"/uploads/{uid}/{new}"
+        if not vec:
+            # a part from a rolled profile (the title block names it: «Труба 50х50х3 ГОСТ 8639-82»):
+            # the section is the profile, the length, ends, holes and slots come from the views
+            yield _ev("stage", text="Читаю штамп и размеры на листе…")
+            lines = await anyio.to_thread.run_sync(profile_raster.ocr_lines, src)
+            try:
+                res = await anyio.to_thread.run_sync(lambda: profile_raster.plan(src, lines=lines))
+            except Exception as e:  # noqa: BLE001
+                res = None
+                print("profile part:", e, flush=True)
+            if res:
+                aid = uuid.uuid4().hex[:12]
+                reading = _mark_excluded(profile_raster.reading(res), exclude)
+                a = {"id": aid, "views": [v["url"] for v in views], "boxes": [v["box"] for v in views],
+                     "reading": reading, "values": {d["id"]: d["value"] for d in reading["dimensions"]},
+                     "profile": {"path": src, "lines": lines}}
+                analyses[aid] = a
+                yield _ev("stage", text=f"Деталь из проката: {res['stock']['name']}, длина {res['length']:g} мм. "
+                                        "Снимаю торцы, отверстия и пазы с видов…")
+                await anyio.to_thread.run_sync(_geometry, a)
+                yield _ev("analysis", **_analysis_view(a))
+                return
         if vec:
             # vector drawing: the numbers are text in the file and the scale is exact — no model needed
             aid = uuid.uuid4().hex[:12]

@@ -77,7 +77,171 @@ def _merge(boxes, gap: int):
     return [tuple(b) for b in boxes]
 
 
+def _run_lengths(mask: np.ndarray) -> np.ndarray:
+    """For every pixel of the mask, the length of the horizontal run of mask pixels it lies in."""
+    out = np.zeros(mask.shape, dtype=np.int32)
+    for i, row in enumerate(mask):
+        d = np.diff(np.concatenate(([0], row.astype(np.int8), [0])))
+        for s, e in zip(np.nonzero(d == 1)[0], np.nonzero(d == -1)[0]):
+            out[i, s:e] = e - s
+    return out
+
+
+def _main_colour(rgb: np.ndarray, ink: np.ndarray) -> np.ndarray | None:
+    """KOMPAS (and most CAD) exports a sheet in colour: the main lines in one colour (blue here),
+    thin lines black, axes another colour. When a third of the ink or more is one saturated hue,
+    that hue is the main lines."""
+    mx, mn = rgb.max(axis=2), rgb.min(axis=2)
+    sat = (mx - mn) > 90
+    col = ink & sat
+    if col.sum() < 0.25 * ink.sum():
+        return None
+    r, g, b = (rgb[..., i].astype(float) for i in range(3))
+    hue = (np.degrees(np.arctan2(math.sqrt(3) * (g - b), 2 * r - g - b)) + 360) % 360
+    hist = np.bincount((hue[col] // 10).astype(int), minlength=36)
+    top = int(hist.argmax())
+    if hist[top] + hist[(top - 1) % 36] + hist[(top + 1) % 36] < 0.6 * col.sum():
+        return None
+    centre = top * 10 + 5
+    dh = np.abs((hue - centre + 180) % 360 - 180)
+    return col & (dh <= 20)
+
+
+def _main_line_views(path: str, max_side: int = 1400) -> list[tuple] | None:
+    """The views of a sheet found by their main (thick) lines — boxes (full-size pixels) of the
+    thick lines of each view and, padded, of its dimensions. Dimension lines and notes are thin:
+    on a busy sheet they glued everything into one blob when all the ink was spread out together
+    (Art's tube drawings: no view at all on 9 sheets of 11). The frame, the title block and the
+    designation box are thick too but lie against the frame: they are left out."""
+    img = Image.open(path).convert("RGB")
+    # shrunk by whole blocks keeping each block's darkest value per colour: a line stays unbroken
+    # (resampling turned thin lines into dotted grey ones)
+    f = max(1, int(math.ceil(max(img.size) / max_side)))
+    a = np.asarray(img).astype(np.int16)
+    H0, W0 = (a.shape[0] // f) * f, (a.shape[1] // f) * f
+    rgb = a[:H0, :W0].reshape(H0 // f, f, W0 // f, f, 3).min(axis=(1, 3))
+    k = 1.0 / f
+    gray = rgb.mean(axis=2)
+    ink = gray < 175
+    h, w = ink.shape
+    if ink.sum() < 200:
+        return None
+    thick = _main_colour(rgb, ink)
+    if thick is None:
+        # no colour of its own for the main lines (a print, a scan): they are the thicker strokes
+        hr = _run_lengths(ink)
+        vr = _run_lengths(ink.T).T
+        stroke = np.minimum(hr, vr)                 # a line's width across it (its length along it)
+        widths = stroke[ink]
+        widths = widths[(widths > 0) & (widths <= 12)]
+        if not len(widths):
+            return None
+        thin = max(1, int(np.bincount(widths).argmax()))
+        if thin < 3:
+            # thin lines one or two pixels wide (a page rendered small): bold text and tables are
+            # as "thick" as the main lines — no telling them apart, the views are found by the ink
+            return None
+        thick = ink & (stroke >= max(2, round(1.6 * thin)))
+    if thick.sum() < 50:
+        return None
+    # the frame: rows / columns with an unbroken line across most of the sheet (a long view's edge
+    # with another view beside it covers as much, but in pieces)
+    def longest(m):
+        best = np.zeros(m.shape[0], dtype=int)
+        for i, row in enumerate(m):
+            dd = np.diff(np.concatenate(([0], row.astype(np.int8), [0])))
+            s, e = np.nonzero(dd == 1)[0], np.nonzero(dd == -1)[0]
+            best[i] = (e - s).max() if len(s) else 0
+        return best
+    bridged = _box_filter_max(thick, 1)
+    rows = np.nonzero(longest(bridged) > 0.7 * w)[0]
+    cols = np.nonzero(longest(bridged.T) > 0.7 * h)[0]
+    fx0 = cols[cols < w / 2].max() if len(cols[cols < w / 2]) else 0
+    fx1 = cols[cols > w / 2].min() if len(cols[cols > w / 2]) else w - 1
+    fy0 = rows[rows < h / 2].max() if len(rows[rows < h / 2]) else 0
+    fy1 = rows[rows > h / 2].min() if len(rows[rows > h / 2]) else h - 1
+    near = max(3, int(0.006 * max(h, w)))
+    inner = np.zeros_like(thick)
+    inner[fy0 + near:fy1 - near, fx0 + near:fx1 - near] = True
+    core = thick & inner
+    span = max(h, w)
+    # letters are thick too where the font is big (notes, view labels, the roughness sign): only
+    # pieces longer than a letter are lines of a view
+    keep = np.zeros_like(core)
+    lab = np.zeros(core.shape, dtype=np.int32)
+    pieces = _label(_box_filter_max(core, 1))
+    for x0, y0, x1, y1, n in pieces:
+        if max(x1 - x0, y1 - y0) >= 0.03 * span:
+            keep[y0:y1, x0:x1] |= core[y0:y1, x0:x1]
+    core = keep
+    del lab
+    # a view's pieces (a break, holes inside its outline) come together; separate views stay apart
+    gap = max(3, int(0.012 * max(h, w)))
+    blobs = _merge(_label(_box_filter_max(core, gap // 2)), gap)
+    out = []
+    for x0, y0, x1, y1, n in blobs:
+        bw, bh = x1 - x0, y1 - y0
+        if max(bw, bh) < 0.06 * span or n < 40:
+            continue                                # a roughness sign, a letter, a stray mark
+        # the title block, the designation box: against the frame
+        touches = x0 <= fx0 + 2 * near or x1 >= fx1 - 2 * near or y0 <= fy0 + 2 * near or y1 >= fy1 - 2 * near
+        if touches:
+            continue
+        # the lines themselves, not their spread-out blob
+        ys, xs = np.nonzero(core[y0:y1, x0:x1])
+        if len(ys):
+            x0, y0, x1, y1 = x0 + xs.min(), y0 + ys.min(), x0 + xs.max() + 1, y0 + ys.max() + 1
+        out.append((x0, y0, x1, y1))
+    if not out:
+        return None
+    # each view takes the thin ink around it (dimensions, its label) up to halfway to its neighbours
+    pad = int(0.06 * span)
+    res = []
+    for i, (x0, y0, x1, y1) in enumerate(out):
+        X0, Y0, X1, Y1 = max(fx0 + near, x0 - pad), max(fy0 + near, y0 - pad), min(fx1 - near, x1 + pad), min(fy1 - near, y1 + pad)
+        for j, (a0, b0, a1, b1) in enumerate(out):
+            if j == i:
+                continue
+            if b0 < y1 and y0 < b1:                 # side by side
+                if a0 >= x1:
+                    X1 = min(X1, (x1 + a0) // 2)
+                elif a1 <= x0:
+                    X0 = max(X0, (a1 + x0) // 2)
+            if a0 < x1 and x0 < a1:                 # one over the other
+                if b0 >= y1:
+                    Y1 = min(Y1, (y1 + b0) // 2)
+                elif b1 <= y0:
+                    Y0 = max(Y0, (b1 + y0) // 2)
+        res.append((int(X0 / k), int(Y0 / k), int(X1 / k), int(Y1 / k), (int(x0 / k), int(y0 / k), int(x1 / k), int(y1 / k))))
+    return res
+
+
 def segment_views(path: str, out_dir: str, max_views: int = 6) -> list[dict]:
+    """The views of a sheet: by their main lines (_main_line_views), else by all the ink spread out
+    (_segment_by_ink, the older way)."""
+    try:
+        found = _main_line_views(path)
+    except Exception:  # noqa: BLE001
+        found = None
+    if not found or len(found) > 12:
+        return _segment_by_ink(path, out_dir, max_views)
+    found.sort(key=lambda b: -(b[4][2] - b[4][0]) * (b[4][3] - b[4][1]))
+    found = found[:max(max_views, 8)]
+    with Image.open(path) as im:
+        full = im.convert("RGB")
+    H = full.height
+    found.sort(key=lambda b: (round(b[4][1] / (0.25 * H)), b[4][0]))
+    os.makedirs(out_dir, exist_ok=True)
+    views = []
+    for i, (x0, y0, x1, y1, core) in enumerate(found, 1):
+        crop = full.crop((x0, y0, x1, y1))
+        name = f"view{i}.png"
+        crop.save(os.path.join(out_dir, name))
+        views.append({"index": i, "file": name, "box": (x0, y0, x1, y1), "size": crop.size, "core": core})
+    return views
+
+
+def _segment_by_ink(path: str, out_dir: str, max_views: int = 6) -> list[dict]:
     """Finds the separate drawing views on a sheet and saves each as viewN.png.
 
     Ink is dilated so that a view, its dimension lines and numbers merge into one blob, while the
