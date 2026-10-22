@@ -520,16 +520,31 @@ def excluded_views(reading: dict) -> set[int]:
 
 
 def without_excluded(reading: dict) -> dict:
-    """The reading without dimensions taken from excluded views (they count for nothing)."""
+    """The reading without the dimensions the user excluded: one by one (axis «excluded», «исключить
+    из расчёта» in the table) and all of an excluded view (they count for nothing)."""
     off = {i + 1 for i in excluded_views(reading)}
-    if not off:
+    dims = reading.get("dimensions", [])
+    if not off and not any(d.get("axis") == "excluded" for d in dims):
         return reading
     keep = []
-    for d in reading.get("dimensions", []):
+    for d in dims:
+        if d.get("axis") == "excluded":
+            continue
         m = re.search(r"(?:вид|изображени\w*|image)\s*(\d+)", str(d.get("view", "")), re.I)
         if not (m and int(m.group(1)) in off):
             keep.append(d)
     return {**reading, "dimensions": keep}
+
+
+def excluded_numbers(reading: dict, values: dict) -> list[float]:
+    """The values of the dimensions the user excluded one by one (as typed in the table)."""
+    out = []
+    for d in reading.get("dimensions", []):
+        if d.get("axis") == "excluded":
+            v = values.get(d["id"], d.get("value"))
+            if isinstance(v, (int, float)):
+                out.append(float(v))
+    return out
 
 
 def pick_side(reading: dict, n_images: int, boxes: list | None, front: int) -> int | None:

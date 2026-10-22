@@ -849,16 +849,35 @@ function renderReview() {
     const off = vm && excluded.has(+vm[1]);
     const tr = el("tr", off ? "off" : flagged.has(d.id) ? "bad" : (d.confidence < 0.7 ? "low" : ""));
     tr.dataset.dim = d.id;
-    tr.onmouseenter = () => sheetHighlight(it => it.dim_id === d.id); tr.onmouseleave = () => sheetHighlight(null);
+    // where this number comes from on the sheet: its own place when known, else the view it was
+    // read on (by the view's number or name), else — for an overall size — the main views
+    const dimPlace = () => {
+      const items = (sheet && sheet.items) || [];
+      if (items.some(it => it.dim_id === d.id)) return it => it.dim_id === d.id;
+      const m = /(\d+)/.exec(d.view || "");
+      let imgs = m ? [+m[1]] : (R.views || []).filter(v => v.name && (d.view || "").toLowerCase().includes(v.name)).map(v => v.image);
+      if (!imgs.length && d.overall) imgs = (R.views || []).filter(v => ["главный", "сверху", "слева"].includes(v.name)).map(v => v.image);
+      return imgs.length ? (it => it.kind === "view" && imgs.includes(it.image)) : null;
+    };
+    tr.onmouseenter = () => sheetHighlight(dimPlace()); tr.onmouseleave = () => sheetHighlight(null);
+    tr.onclick = e => { if (e.target.tagName === "TD" || e.target === tr) sheetFocus(dimPlace()); };
+    tr.title = "Наведите — место на листе подсветится; щелчок по строке — показать его крупно";
     if (off) { tr.style.opacity = "0.4"; tr.title = "С исключённого вида: в расчёте не участвует"; }
     tr.appendChild(el("td", null, d.id));
     const tdm = el("td"); const mi = el("input"); mi.value = d.meaning || ""; mi.style.width = "100%";
     mi.title = "Что задаёт размер — можно исправить"; mi.oninput = () => { d.meaning = mi.value; $("rvAccept").disabled = true; };
     tdm.appendChild(mi);
     const ax = el("select"); ax.style.marginTop = "2px";
-    for (const [v, t] of [["length", "длина X"], ["width", "ширина Y"], ["height", "высота Z"], ["diameter", "диаметр"], ["radius", "радиус"], ["other", "другое"]])
+    for (const [v, t] of [["length", "длина X"], ["width", "ширина Y"], ["height", "высота Z"], ["diameter", "диаметр"], ["radius", "радиус"], ["other", "другое"], ["excluded", "исключить из расчёта"]])
       ax.appendChild(new Option(t, v));
-    ax.value = d.axis || "other"; ax.onchange = () => { d.axis = ax.value; };
+    ax.value = d.axis || "other";
+    ax.title = "«Исключить из расчёта»: размер не участвует в построении и проверках (ошибочно прочитанное число, размер для справки)";
+    ax.onchange = () => {
+      if (ax.value === "excluded" && d.axis !== "excluded") d.axis_was = d.axis;
+      d.axis = ax.value; if (ax.value === "excluded") d.overall = false;
+      $("rvAccept").disabled = true; renderReview();
+    };
+    if (d.axis === "excluded") { tr.classList.add("offf"); tr.title = "Исключён из расчёта: в построении и проверках не участвует"; }
     const ov = el("label", "hint"); const cb = el("input"); cb.type = "checkbox"; cb.checked = !!d.overall; cb.style.width = "auto";
     cb.onchange = () => { d.overall = cb.checked; }; ov.appendChild(cb); ov.appendChild(document.createTextNode(" габарит"));
     const row2 = el("div"); row2.style.display = "flex"; row2.style.gap = "6px"; row2.style.alignItems = "center";
@@ -972,9 +991,11 @@ function renderSheet() {
   const bar = el("div", "sheetbar"); bar.appendChild(el("b", null, "Что распознано на листе"));
   const show = {};
   for (const [k, [col, name]] of Object.entries(MARK)) {
-    if (!ov.items.some(it => it.kind === k)) continue;
-    show[k] = true;
-    const lb = el("label"); const cb = el("input"); cb.type = "checkbox"; cb.checked = true;
+    const n = ov.items.filter(it => it.kind === k).length;
+    if (!n) continue;
+    // dozens of numbers on a busy sheet hide the drawing: then they show only for the row in hand
+    show[k] = !(k === "dim" && n > 25);
+    const lb = el("label"); const cb = el("input"); cb.type = "checkbox"; cb.checked = show[k];
     cb.onchange = () => { show[k] = cb.checked; drawSheet(); };
     const sw = el("span", "sw"); sw.style.borderColor = col;
     lb.append(cb, sw, document.createTextNode(name)); bar.appendChild(lb);
@@ -1050,9 +1071,9 @@ function drawSheet() {
   g.save(); g.translate(s.ox, s.oy); g.scale(s.k, s.k);
   g.drawImage(s.img, 0, 0);
   for (const it of s.items) {
-    if (!s.show[it.kind]) continue;
-    const [a, b, c, d] = it.box, col = MARK[it.kind][0];
     const on = (s.hl && s.hl(it)) || s.hover === it || s.sel === it;
+    if (!s.show[it.kind] && !on) continue;     // a hidden layer still shows what a row points at
+    const [a, b, c, d] = it.box, col = MARK[it.kind][0];
     g.lineWidth = (on ? 3.5 : it.kind === "view" ? 1.2 : 2) / s.k;
     g.strokeStyle = col;
     if (it.kind === "view") g.setLineDash([8 / s.k, 5 / s.k]); else g.setLineDash([]);
@@ -1068,6 +1089,21 @@ function drawSheet() {
 }
 
 function sheetHighlight(fn) { if (sheet) { sheet.hl = fn; drawSheet(); } }
+
+// the sheet zoomed onto the items a row stands for, the item selected
+function sheetFocus(fn) {
+  const s = sheet; if (!s || !fn || !s.img.naturalWidth) return;
+  const hits = s.items.filter(fn); if (!hits.length) return;
+  const iw = s.img.naturalWidth, ih = s.img.naturalHeight;
+  const x0 = Math.min(...hits.map(h => h.box[0])) * iw, y0 = Math.min(...hits.map(h => h.box[1])) * ih;
+  const x1 = Math.max(...hits.map(h => h.box[2])) * iw, y1 = Math.max(...hits.map(h => h.box[3])) * ih;
+  // enough round it to see what the number belongs to
+  const W = s.stage.clientWidth, H = s.stage.clientHeight, pad = Math.max(Math.max(x1 - x0, y1 - y0) * 1.5, 0.07 * Math.max(iw, ih));
+  s.k = Math.min(W / (x1 - x0 + 2 * pad), H / (y1 - y0 + 2 * pad), 4 * Math.min(W / iw, H / ih) * 10);
+  s.ox = W / 2 - (x0 + x1) / 2 * s.k; s.oy = H / 2 - (y0 + y1) / 2 * s.k;
+  s.sel = hits[0]; s.hl = fn; drawSheet();
+  s.stage.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
 
 // ---------- the feature table ----------
 const PARAM_NAMES = { x: "центр 1", y: "центр 2", d: "Ø", w: "ширина", h: "высота" };
@@ -1103,6 +1139,8 @@ function renderFeatures() {
     }
     tr.appendChild(t2);
     tr.onmouseenter = () => sheetHighlight(it => it.op === n); tr.onmouseleave = () => sheetHighlight(null);
+    t2.firstChild.style.cursor = "zoom-in"; t2.firstChild.title = "Показать на листе крупно";
+    t2.firstChild.onclick = () => sheetFocus(it => it.op === n);
     tb.appendChild(tr);
   });
 }

@@ -8,6 +8,7 @@ go through the same reconstruction as a scan, but without a language model and w
 from __future__ import annotations
 
 import math
+import os
 import re
 
 from PIL import Image, ImageDraw
@@ -1011,11 +1012,31 @@ def clean_text(t: str) -> str:
     return t.replace("%%C", "%%c").strip()
 
 
+def text_box(e: dict, t: str) -> list[float] | None:
+    """The box a text takes on the sheet, mm [x0, y0, x1, y1] (y up): a dimension's text is centred
+    on its text point (11/21), a plain text starts at its insertion point (10/20); turned by 50."""
+    h = float(e.get(40) or 3.5)
+    w = max(1, len(t)) * 0.62 * h
+    if e["type"] == "DIMENSION" and isinstance(e.get(11), (int, float)):
+        cx, cy, centred = e[11], e.get(21, 0.0), True
+    elif isinstance(e.get(10), (int, float)):
+        cx, cy, centred = e[10], e.get(20, 0.0), False
+    else:
+        return None
+    a = math.radians(float(e.get(50) or 0.0))
+    ux, uy, vx, vy = math.cos(a), math.sin(a), -math.sin(a), math.cos(a)
+    if centred:
+        cx, cy = cx - ux * w / 2 - vx * h / 2, cy - uy * w / 2 - vy * h / 2
+    pts = [(cx + ux * s + vx * q, cy + uy * s + vy * q) for s in (0, w) for q in (0, h)]
+    return [min(p[0] for p in pts), min(p[1] for p in pts), max(p[0] for p in pts), max(p[1] for p in pts)]
+
+
 def numbers(doc: dict) -> dict:
     """Dimension numbers written on the drawing: diameters (Ø/%%c), radii (R) and plain values.
     Only texts that are a dimension as a whole count — not the title block, technical requirements
     or tolerances. A dimension with a measured value but no text override also counts."""
     out = {"values": [], "diameters": [], "radii": []}
+    where = []      # [kind, value, x, y]: where each number is written (mm), for the review window
     for e in doc["entities"]:
         texts = []
         if e["type"] in ("TEXT", "MTEXT") and e.get("from_dimension"):
@@ -1038,15 +1059,20 @@ def numbers(doc: dict) -> dict:
             if t.rstrip().endswith("*"):
                 key = "values"   # «11,46*» counts as a size, but nothing is snapped to it as a Ø
             out[key].append(v)
+            box = text_box(e, t)
+            if box:
+                where.append([key, v, *box])
     for k in out:
         out[k] = sorted(set(out[k]))
+    out["where"] = where
     return out
 
 
 def render(doc: dict, out_png: str, px_per_mm: float = 8.0, margin_mm: float = 10.0,
-           bounds: tuple | None = None) -> dict:
+           bounds: tuple | None = None, texts: bool = False) -> dict:
     """Draws the drawing to a PNG at an exact scale: visible lines heavy, hidden lines dashed,
-    dimension/axis/thin geometry light — the conventions the raster analysis relies on."""
+    dimension/axis/thin geometry light — the conventions the raster analysis relies on.
+    texts: the numbers and notes too (the picture the user looks at; the analysis does without)."""
     xs, ys = [], []
     for e in doc["entities"]:
         for p in _points(e):
@@ -1079,8 +1105,44 @@ def render(doc: dict, out_png: str, px_per_mm: float = 8.0, margin_mm: float = 1
                 _dashed(d, ax, ay, bx, by, 3 * px_per_mm, 1.5 * px_per_mm, max(1, thick // 2 + 1))
             else:
                 d.line([ax, ay, bx, by], fill=0, width=width)
+    if texts:
+        _draw_texts(img, doc, to, px_per_mm)
     img.save(out_png)
     return {"png": out_png, "px_per_mm": px_per_mm, "origin": (x0, y1)}
+
+
+def _draw_texts(img, doc: dict, to, ppm: float) -> None:
+    from PIL import ImageFont
+    font_file = next((f for f in (r"C:\Windows\Fonts\GOST_AU.ttf", r"C:\Windows\Fonts\arial.ttf")
+                      if os.path.exists(f)), None)
+    fonts = {}
+    for e in doc["entities"]:
+        if e["type"] not in ("TEXT", "MTEXT", "DIMENSION") or not e.get("text"):
+            continue
+        if e["type"] == "DIMENSION" and e.get("block"):
+            continue        # its block's own text pieces are drawn
+        t = clean_text(e["text"])
+        if not t or t == "<>":
+            continue
+        box = text_box(e, t)
+        if not box:
+            continue
+        h = float(e.get(40) or 3.5)
+        size = max(6, int(h * ppm))
+        if size not in fonts:
+            try:
+                fonts[size] = ImageFont.truetype(font_file, size) if font_file else ImageFont.load_default()
+            except OSError:
+                fonts[size] = ImageFont.load_default()
+        f = fonts[size]
+        tw = int(f.getlength(t)) + 4
+        tile = Image.new("L", (max(1, tw), size + size // 3), 255)
+        ImageDraw.Draw(tile).text((2, 0), t, fill=0, font=f)
+        rot = float(e.get(50) or 0.0)
+        if abs(rot) > 0.5:
+            tile = tile.rotate(rot, expand=True, fillcolor=255)
+        px, py = to(box[0], box[3])
+        img.paste(tile, (int(px), int(py)), Image.eval(tile, lambda v: 255 - v))
 
 
 def view_size_mm(path: str, px_per_mm: float, snap_to: list[float], tol: float = 0.8) -> tuple[float, float]:

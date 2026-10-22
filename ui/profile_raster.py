@@ -333,6 +333,17 @@ def plan(path: str, views: list[dict] | None = None, lines: list[str] | None = N
             box = [d["a"], min(w["y0"], d["line"]), d["b"], max(w["y1"], d["line"])]
         marks.append({"kind": "dim", "box": [int(v) for v in box], "label": f"{d['prefix']}{d['value']:g}",
                       "text": [int(w["x0"]), int(w["y0"]), int(w["x1"]), int(w["y1"])]})
+    # the stock's sizes a, b, t: where the title block names the profile
+    by_line: dict[int, list[dict]] = {}
+    for w in ocr_words or []:
+        by_line.setdefault(w["line"], []).append(w)
+    for ws in by_line.values():
+        if _TUBE.search(" ".join(w["text"] for w in ws)):
+            box = [min(w["x"] for w in ws), min(w["y"] for w in ws), max(w["x"] + w["w"] for w in ws),
+                   max(w["y"] + w["h"] for w in ws)]
+            for i, lab in (("a", "ширина"), ("b", "высота"), ("t", "стенка")):
+                marks.append({"kind": "dim", "box": box, "label": f"{lab} профиля — из штампа", "dim_id": i})
+            break
     # the length: the longest dimension along a long view spanning (nearly) all of it
     L, Ldim = None, None
     for dm in sorted(dims, key=lambda d: -d["value"]):
@@ -353,7 +364,7 @@ def plan(path: str, views: list[dict] | None = None, lines: list[str] | None = N
     if Ldim is not None:
         lt = [int(Ldim["word"][q]) for q in ("x0", "y0", "x1", "y1")]
         for mk in marks:
-            if mk["kind"] == "dim" and mk["text"] == lt:
+            if mk["kind"] == "dim" and mk.get("text") == lt:
                 mk["dim_id"] = "L"
     ops = [{"op": "extrude", "plane": "YZ", "offset": 0, "depth": L, "shapes": tube_section(a, b, t),
             "comment": f"{st['name']}, длина {L:g}"}]

@@ -26,4 +26,10 @@ assert drawing.pick_views({"views": []}, 3, boxes) == (0, 1)
 assert drawing.pick_views({"views": [{"image": 2, "name": "исключить"}]}, 3, boxes) == (0, 2)
 # an excluded first view: the main view is looked for among the others
 assert drawing.pick_views({"views": [{"image": 1, "name": "исключить"}]}, 3, boxes) == (1, 2)
+# one dimension excluded in the table (axis «excluded»): gone from the reading, its value listed
+R = {"views": [], "dimensions": [{"id": "d1", "value": 100, "axis": "length", "overall": True},
+                                 {"id": "d2", "value": 8, "axis": "excluded", "view": "главный"},
+                                 {"id": "d3", "value": 20, "axis": "diameter"}]}
+assert [d["id"] for d in drawing.without_excluded(R)["dimensions"]] == ["d1", "d3"]
+assert drawing.excluded_numbers(R, {"d2": 8.5}) == [8.5]
 print("EXCLUDE TEST PASSED")

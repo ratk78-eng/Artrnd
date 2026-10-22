@@ -486,6 +486,9 @@ def _prepare_vector(dxf_path: str, folder: str) -> None:
             json.dump(meta, fh, ensure_ascii=False)
         return
     r = dxf.render(doc, os.path.join(folder, "source_vector.png"))
+    # the same sheet with its numbers and notes written in: the picture the review window shows
+    with contextlib.suppress(Exception):
+        dxf.render(doc, os.path.join(folder, "sheet_text.png"), texts=True)
     meta = {"px_per_mm": r["px_per_mm"], "numbers": dxf.numbers(doc),
             "hidden_lines": sum(e["kind"] == "hidden" for e in doc["entities"]),
             # where the sheet picture lies in the drawing's mm (for marking views on it)
@@ -719,6 +722,13 @@ def _overlay(a: dict) -> dict | None:
     (`op` = the operation it became)."""
     if not a.get("sheet"):
         return None
+    image = a["sheet"]
+    if a.get("vector"):
+        # a vector sheet: shown with its numbers written in (the analysis' own render has none)
+        alt = re.sub(r"[^/]+$", "sheet_text.png", image)
+        with contextlib.suppress(ValueError):
+            if os.path.exists(_upload_path(alt)):
+                image = alt
     size = a.get("sheet_size")
     if not size:
         try:
@@ -744,13 +754,24 @@ def _overlay(a: dict) -> dict | None:
         k, (ox, oy) = sh["px_per_mm"], sh["origin"]
         boxes = [[(v["box_mm"][0] - ox) * k, (oy - v["box_mm"][3]) * k, (v["box_mm"][2] - ox) * k,
                   (oy - v["box_mm"][1]) * k] if v.get("box_mm") else None for v in vviews]
+        # each number of the table where it is written on the sheet
+        for d in a["reading"].get("dimensions", []):
+            for wb in d.get("where_mm") or []:
+                if len(wb) != 4:
+                    continue
+                x0, y0, x1, y1 = wb
+                m = 0.8      # mm round the text
+                items.append({"kind": "dim", "dim_id": d["id"], "label": f"{d['id']}: {d.get('value', ''):g}"
+                              if isinstance(d.get("value"), (int, float)) else d["id"],
+                              "box": [(x0 - m - ox) * k / W, (oy - y1 - m) * k / H, (x1 + m - ox) * k / W,
+                                      (oy - y0 + m) * k / H]})
     elif a.get("vector"):
         boxes = []   # (steel views and older files: not placed on the sheet)
     for i, b in enumerate(boxes):
         if b:
             items.insert(0, {"kind": "view", "label": f"{i + 1}: {names.get(i + 1) or 'вид'}", "image": i + 1,
                              "box": [b[0] / W, b[1] / H, b[2] / W, b[3] / H]})
-    return {"image": a["sheet"], "size": size, "items": items} if items else None
+    return {"image": image, "size": size, "items": items} if items else None
 
 
 def _op_features(ops: list[dict]) -> list[dict]:
@@ -895,11 +916,13 @@ def _vector_reading(vec: dict, view_paths: list[str], boxes: list, skip: set | N
             out.append(float(near) if v not in n["values"] and near is not None and abs(near - bv) <= 0.3 else v)
         return out[0], out[1]
 
-    def add(value, meaning, axis, overall=False):
+    def add(value, meaning, axis, overall=False, kind="values"):
         nonlocal k
         k += 1
+        # where the number is written on the sheet (mm), for marking it in the review window
+        where = [w[2:6] for w in n.get("where", []) if len(w) >= 6 and w[0] == kind and abs(w[1] - value) < 1e-9]
         dims.append({"id": f"d{k}", "value": value, "view": "из файла", "meaning": meaning, "axis": axis,
-                     "overall": overall, "confidence": 1.0})
+                     "overall": overall, "confidence": 1.0, "where_mm": where})
     reading = {"views": [], "dimensions": dims, "overall": {}, "features": []}
     lay = _vector_layout(vec, skip)
     pair = (lay["front"], lay["top"]) if lay and lay["top"] is not None else \
@@ -942,9 +965,9 @@ def _vector_reading(vec: dict, view_paths: list[str], boxes: list, skip: set | N
         if v not in used:
             add(v, "размер из файла", "other")
     for v in n["diameters"]:
-        add(v, f"диаметр Ø{v:g}", "diameter")
+        add(v, f"диаметр Ø{v:g}", "diameter", kind="diameters")
     for v in n["radii"]:
-        add(v, f"радиус R{v:g}", "radius")
+        add(v, f"радиус R{v:g}", "radius", kind="radii")
     return reading
 
 
@@ -2755,6 +2778,13 @@ def _geometry_revolve(a: dict) -> None:
 def _geometry(a: dict) -> None:
     """Shape from the pictures (vision.reconstruct), numbers from the confirmed dimensions."""
     dxf.SNAP_RADII, dxf.SNAPPED = [], {}
+    if a.get("vector") and a["vector"].get("numbers"):
+        # the numbers the user excluded in the table are not snapped to (the file's own list is kept)
+        a.setdefault("numbers_all", a["vector"]["numbers"])
+        off = drawing.excluded_numbers(a["reading"], a["values"])
+        a["vector"] = {**a["vector"], "numbers": {
+            k: ([x for x in v if not any(abs(float(x) - o) < 1e-9 for o in off)]
+                if k in ("values", "diameters", "radii") else v) for k, v in a["numbers_all"].items()}}
     skip = drawing.excluded_views(a["reading"])
     if a.get("steel"):
         st = a["steel"]
@@ -2771,7 +2801,9 @@ def _geometry(a: dict) -> None:
     if a.get("profile"):
         pf = a["profile"]
         try:
-            res = profile_raster.plan(pf["path"], lines=pf["lines"], length=a["values"].get("L"))
+            Ld = next((d for d in a["reading"].get("dimensions", []) if d.get("id") == "L"), {})
+            res = profile_raster.plan(pf["path"], lines=pf["lines"], ocr_words=pf.get("words"),
+                                      length=None if Ld.get("axis") == "excluded" else a["values"].get("L"))
         except Exception as e:  # noqa: BLE001
             res = None
             print("profile part:", e, flush=True)
@@ -3162,7 +3194,7 @@ async def _analyze_events(body: dict):
             a = {"id": aid, "views": [v["url"] for v in views], "boxes": [v["box"] for v in views],
                  "cores": [v.get("core") for v in views],
                  "reading": reading, "values": {d["id"]: d["value"] for d in reading["dimensions"]},
-                 "profile": {"path": src, "lines": lines}}
+                 "profile": {"path": src, "lines": lines, "words": words}}
             analyses[aid] = a
             a["sheet"] = body["image"]
             yield _ev("stage", text=f"Деталь из проката: {res['stock']['name']}, длина {res['length']:g} мм. "
@@ -3303,6 +3335,10 @@ def _apply_edits(a: dict, body: dict) -> None:
         a["reading"]["overall"] = body["overall"]
     # dimensions the user marked as overall decide the overall size along their axis
     overall = a["reading"].setdefault("overall", {})
+    # a dimension excluded from the calculation sets no overall size
+    off = {d.get("id") for d in a["reading"].get("dimensions", []) if d.get("axis") == "excluded"}
+    for ax in [k for k, v in overall.items() if v in off]:
+        del overall[ax]
     for d in a["reading"].get("dimensions", []):
         if d.get("overall") and d.get("axis") in ("length", "width", "height"):
             ref = overall.get(d["axis"])
@@ -3376,6 +3412,12 @@ async def _preview(a: dict, body: dict, projections: bool = True) -> dict:
         a["feature_edits"] = body["features"]
     await anyio.to_thread.run_sync(_geometry, a)
     out = _analysis_view(a)
+    plan = a["reading"].get("plan") or {}
+    if (a.get("geometry") or {}).get("error") and (not plan or plan.get("source") == "picture"):
+        # the shape could not be made from what the table says now: an older plan is not built
+        # (a plan the model wrote on «replan» still is)
+        out["build"] = {"error": a["geometry"]["error"]}
+        return out
     try:
         ops = drawing.resolve_plan(a["reading"]["plan"]["operations"], a["values"])
         ops = _apply_feature_edits(ops, a.get("feature_edits") or {})
