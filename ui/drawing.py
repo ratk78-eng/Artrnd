@@ -784,7 +784,8 @@ def _safe_eval(expr, values):
         return None
 
 
-_NUMERIC_KEYS = {"x", "y", "w", "h", "x1", "y1", "x2", "y2", "r", "d", "a1", "a2", "offset", "depth", "angle"}
+_NUMERIC_KEYS = {"x", "y", "w", "h", "x1", "y1", "x2", "y2", "r", "d", "a1", "a2", "offset", "depth", "angle",
+                 "radius"}
 
 
 def resolve_plan(operations: list[dict], values: dict[str, float]) -> list[dict]:
@@ -794,7 +795,11 @@ def resolve_plan(operations: list[dict], values: dict[str, float]) -> list[dict]
             return {k: walk(x, k) for k, x in v.items()}
         if isinstance(v, list):
             if key == "points":
-                return [[evaluate(c, values) for c in p] if isinstance(p, list) else walk(p) for p in v]
+                # points are [x, y] (sketch) or [X, Y, Z] (a fillet edge), and a fillet edge may give a
+                # list of candidate points — numbers at any depth
+                def pts(p):
+                    return [pts(c) for c in p] if isinstance(p, list) else evaluate(p, values)
+                return [pts(p) if isinstance(p, list) else walk(p) for p in v]
             return [walk(x) for x in v]
         if key in _NUMERIC_KEYS:
             return evaluate(v, values)
