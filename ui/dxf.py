@@ -1012,6 +1012,47 @@ def clean_text(t: str) -> str:
     return t.replace("%%C", "%%c").strip()
 
 
+# materials named in a title block → density, g/cm³
+DENSITY = [(r"\bАД\d|\bАМг|\bАМц|\bД1[6-9]|\bВ95|\bАК\d|алюмин", 2.7, "алюминиевый сплав"),
+           (r"\bЛ[СМ]?\d\d|латун", 8.5, "латунь"), (r"\bБр[А-Я]|бронз", 8.8, "бронза"),
+           (r"\bМ[0-3]\b|медь", 8.9, "медь"), (r"\bВТ\d|\bОТ4|титан", 4.5, "титан"),
+           (r"\bМА\d|\bМЛ\d|магни", 1.8, "магниевый сплав"),
+           (r"капролон|полиамид|\bПА\s?6", 1.15, "полиамид"), (r"фторопласт", 2.2, "фторопласт"),
+           (r"\bСт\s?\d|сталь|\b\d{2}Х|\b\d{2}Г|\bУ\d+А?\b|\b(?:10|20|35|40|45|65)\b\s*ГОСТ\s*1050", 7.85, "сталь")]
+
+
+def stamp_info(doc: dict) -> dict:
+    """What the title block says: the part's mass (the number under «Масса», as written — the
+    unit is decided against the model) and the material with its density. {} when not found."""
+    texts = [(clean_text(e["text"]), e) for e in doc["entities"]
+             if e["type"] in ("TEXT", "MTEXT") and e.get("text") and isinstance(e.get(10), (int, float))]
+    out = {}
+    for t, e in texts:
+        if re.fullmatch(r"[МM]асса", t.strip(), re.I):
+            h = float(e.get(40) or 3.5)
+            mx, my = e[10] + 0.6 * h * len(t) / 2, e.get(20, 0.0)
+            cand = []
+            for t2, e2 in texts:
+                if re.fullmatch(r"\d+(?:[.,]\d+)?", t2.strip()):
+                    w = 0.6 * float(e2.get(40) or h) * len(t2.strip())
+                    dx, dy = abs(e2[10] + w / 2 - mx), my - e2.get(20, 0.0)
+                    if dx < 2.5 * h and 0.2 * h < dy < 4 * h:
+                        cand.append((dy, float(t2.strip().replace(",", "."))))
+            if cand:
+                out["mass"] = min(cand)[1]
+                break
+    # the material: a grade with its standard («АД31 ГОСТ 4784-97») first, a bare word after
+    ordered = [x for x in texts if re.search(r"ГОСТ|ОСТ|ТУ\b", x[0])] + texts
+    for t, _ in ordered:
+        if len(t) > 60:
+            continue                    # a technical requirement, not the title block's material cell
+        hit = next(((rho, name) for pat, rho, name in DENSITY if re.search(pat, t, re.I)), None)
+        if hit:
+            out.update({"material": t.strip(), "density": hit[0], "material_kind": hit[1]})
+            break
+    return out
+
+
 def text_box(e: dict, t: str) -> list[float] | None:
     """The box a text takes on the sheet, mm [x0, y0, x1, y1] (y up): a dimension's text is centred
     on its text point (11/21), a plain text starts at its insertion point (10/20); turned by 50."""

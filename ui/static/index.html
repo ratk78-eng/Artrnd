@@ -930,7 +930,7 @@ function renderReview() {
   const b = rv.build;
   if (b) {
     $("rvResult").textContent = b.error ? "Ошибка построения: " + b.error :
-      `Операций выполнено ${b.operations_done} из ${b.operations_total}. Объём ${b.volume_mm3} мм³, масса ${(b.mass_g / 1000).toFixed(3)} кг (сталь)` +
+      `Операций выполнено ${b.operations_done} из ${b.operations_total}. Объём ${b.volume_mm3} мм³, масса ${b.mass_g < 100 ? b.mass_g.toFixed(2) + " г" : (b.mass_g / 1000).toFixed(3) + " кг"} (${b.material || "сталь"})` +
       (b.failed ? `. Остановилось на операции ${b.failed.n}: ${b.failed.error}` : "") +
       ((b.skipped || []).length ? `. Пропущено операций: ${b.skipped.length} (${b.skipped.map(s => `${s.n}: ${s.comment || s.op}`).join("; ")})` : "") +
       ((b.invalid || []).length ? `. С ошибкой в КОМПАСе: ${b.invalid.map(s => `${s.n}: ${s.comment || s.op}`).join("; ")}` : "") +
@@ -1152,18 +1152,23 @@ function renderSummary() {
   const stamp = rv.mass_stamp;
   const b = rv.build;
   if (!b) {
-    s.appendChild(el("div", null, stamp ? `Масса по штампу: ${stamp} кг. Нажмите «Проверить», чтобы построить и сверить.` :
+    const R0 = rv.reading || {};
+    if (R0.material) s.appendChild(el("div", null, `Материал по штампу: ${R0.material.name} (${R0.material.kind}, ${R0.material.density} г/см³)`));
+    if (!stamp && R0.mass_written) s.appendChild(el("div", null, `В штампе масса ${R0.mass_written}: кг или г — станет ясно после построения. Нажмите «Проверить».`));
+    else s.appendChild(el("div", null, stamp ? `Масса по штампу: ${stamp} кг. Нажмите «Проверить», чтобы построить и сверить.` :
       "Масса в штампе не найдена. Нажмите «Проверить», чтобы построить деталь."));
     return;
   }
   if (b.error) { s.className = "err"; s.appendChild(el("div", "bad", "Деталь не построена: " + b.error)); return; }
   const m = (b.mass_g || 0) / 1000;
-  const line = el("div"); line.append(document.createTextNode(`Масса модели ${m.toFixed(3)} кг`));
+  // small parts in grams, others in kilograms
+  const fmt = kg => kg < 0.1 ? `${+(kg * 1000).toFixed(2)} г` : `${+kg.toFixed(3)} кг`;
+  const line = el("div"); line.append(document.createTextNode(`Масса модели ${fmt(m)}` + (b.material ? ` (${b.material})` : "")));
   let level = "ok";
   if (stamp) {
     const pct = 100 * (m / stamp - 1);
     const sp = el("span", Math.abs(pct) <= 3 ? "good" : Math.abs(pct) <= 8 ? "so" : "bad",
-                  ` · по штампу ${stamp} кг (${pct > 0 ? "+" : ""}${pct.toFixed(1)} %)`);
+                  ` · по штампу ${fmt(stamp)} (${pct > 0 ? "+" : ""}${pct.toFixed(1)} %)`);
     if (Math.abs(pct) > 3) level = Math.abs(pct) <= 8 ? "warn" : "err";
     line.appendChild(sp);
   } else line.append(document.createTextNode(" · в штампе массы нет"));

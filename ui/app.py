@@ -492,7 +492,9 @@ def _prepare_vector(dxf_path: str, folder: str) -> None:
     meta = {"px_per_mm": r["px_per_mm"], "numbers": dxf.numbers(doc),
             "hidden_lines": sum(e["kind"] == "hidden" for e in doc["entities"]),
             # where the sheet picture lies in the drawing's mm (for marking views on it)
-            "sheet": {"px_per_mm": r["px_per_mm"], "origin": list(r["origin"])}}
+            "sheet": {"px_per_mm": r["px_per_mm"], "origin": list(r["origin"])},
+            # the title block: mass and material (the model's mass is reckoned with its density)
+            "stamp": dxf.stamp_info(doc)}
     # the views straight from the geometry (no frame, no title block), each drawn on its own
     boxes = dxf.view_boxes(doc)
     if boxes:
@@ -913,7 +915,15 @@ def _vector_reading(vec: dict, view_paths: list[str], boxes: list, skip: set | N
         out = []
         for v, bv in ((L, b[2] - b[0]), (H, b[3] - b[1])):
             near = min(n["values"], key=lambda c: abs(c - bv), default=None)
-            out.append(float(near) if v not in n["values"] and near is not None and abs(near - bv) <= 0.3 else v)
+            if v in n["values"]:
+                out.append(v)
+            elif near is not None and abs(near - bv) <= 0.3:
+                out.append(float(near))
+            else:
+                # no number on the drawing for it: the box from the file's own lines is exact (the
+                # picture's silhouette is rounded — «Флажок» 18.39 high was taken as 18.5, and the
+                # main outline then got stretched to it)
+                out.append(round(bv, 2))
         return out[0], out[1]
 
     def add(value, meaning, axis, overall=False, kind="values"):
@@ -3208,6 +3218,12 @@ async def _analyze_events(body: dict):
         boxes = [v["box"] for v in views]
         reading = _mark_excluded(_vector_reading(vec, [_upload_path(v["url"]) for v in views], boxes, skip0),
                                  exclude)
+        stamp = vec.get("stamp") or {}
+        if stamp.get("density"):
+            reading["material"] = {"name": stamp.get("material"), "kind": stamp.get("material_kind"),
+                                   "density": stamp["density"]}
+        if stamp.get("mass"):
+            reading["mass_written"] = stamp["mass"]     # kg or g: decided against the built model
         a = {"id": aid, "views": [v["url"] for v in views], "boxes": boxes, "reading": reading,
              "values": {d["id"]: d["value"] for d in reading["dimensions"]}, "vector": vec}
         analyses[aid] = a
@@ -3431,6 +3447,22 @@ async def _preview(a: dict, body: dict, projections: bool = True) -> dict:
     text, images, err = await bridge.call("build_part", {"operations": ops, "name": a["reading"].get("title") or "По чертежу",
                                                        "screenshot": False, "keep_going": True})
     out["build"] = {"error": text} if err else json.loads(text)
+    mat = a["reading"].get("material") or {}
+    if not err and out["build"].get("volume_mm3"):
+        b = out["build"]
+        # the mass in the drawing's material (KOMPAS reckons steel by default)
+        if mat.get("density"):
+            b["mass_g"] = round(b["volume_mm3"] * mat["density"] / 1000, 3)
+            b["material"] = mat.get("kind") or mat.get("name")
+        else:
+            b["material"] = "сталь"
+        w = a["reading"].get("mass_written")
+        if w and not a["reading"].get("mass_kg"):
+            # the title block's number: kilograms as a rule, grams on small parts — whichever is
+            # nearer the model's mass
+            m_kg = b["mass_g"] / 1000
+            a["reading"]["mass_kg"] = min((w, w / 1000), key=lambda c: abs(math.log(max(c, 1e-9) / max(m_kg, 1e-9))))
+            out["mass_stamp"] = a["reading"]["mass_kg"]
     if not err and not out["build"].get("volume_mm3"):
         out["issues"].append({"level": "error", "dims": [],
                               "text": "Тело не построено: объём модели 0. План нужно исправить или составить заново."})
@@ -3449,8 +3481,10 @@ async def _preview(a: dict, body: dict, projections: bool = True) -> dict:
         if mass and out["build"].get("mass_g"):
             diff = out["build"]["mass_g"] / 1000 - float(mass)
             if abs(diff) > 0.05 * float(mass):
+                fmt = lambda kg: f"{kg * 1000:.2f} г" if kg < 0.1 else f"{kg:.3f} кг"  # noqa: E731
                 out["issues"].append({"level": "warning", "dims": [],
-                                      "text": f"Масса модели {out['build']['mass_g'] / 1000:.3f} кг, в штампе {mass} кг"})
+                                      "text": f"Масса модели {fmt(out['build']['mass_g'] / 1000)}, "
+                                              f"в штампе {fmt(float(mass))} ({100 * diff / float(mass):+.0f} %)"})
         if projections:
             ptext, pimages, perr = await bridge.call("projections", {})
             if not perr:

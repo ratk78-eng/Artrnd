@@ -31,6 +31,8 @@ echo ===== turned_solid --build
 C:\Python\python.exe turned_solid_test.py --build 2>&1
 echo ===== raster_tube --build
 C:\Python\python.exe raster_tube_test.py --build 2>&1
+echo ===== flag --build
+C:\Python\python.exe pdf_flag_test.py --build 2>&1
 echo ===== clamp --build
 C:\Python\python.exe pdf_clamp_test.py --build 2>&1
 echo ===== done
