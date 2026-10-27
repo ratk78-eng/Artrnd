@@ -11,6 +11,7 @@
 | `cad.py` | Работа с CAD через OCP: габариты, припуск, экспорт STEP |
 | `pdf_report.py` | PDF-отчёт (ReportLab) |
 | `test_*.py` | Тесты |
+| `lathe_cam/` | Отдельный прототип: токарный CAM для KMT-KE / SINUMERIK 808D, см. `lathe_cam/README.md` |
 | `setup.bat`, `start.bat` | Установка зависимостей и запуск из исходников |
 | `build_installer.py`, `build_installer.bat`, `NEST.iss` | Сборка установщика, см. `README_BUILD.md` |
 

@@ -1,0 +1,32 @@
+{
+  "program": "VAL_01",
+  "stock": {"diameter": 60, "length": 110, "face_allowance": 2},
+  "contour": {
+    "name": "VAL_01_K",
+    "start": {"x": 26, "z": 0},
+    "elements": [
+      {"x": 30, "z": -2},
+      {"x": 30, "z": -30},
+      {"x": 40, "z": -30},
+      {"x": 40, "z": -55},
+      {"type": "arc", "x": 50, "z": -60, "r": 5, "dir": "cw"},
+      {"x": 56, "z": -60},
+      {"x": 56, "z": -85},
+      {"x": 62, "z": -85}
+    ]
+  },
+  "tools": {
+    "1": {"name": "PDJNR 25 VNMG 0.8", "nose_radius": 0.8},
+    "2": {"name": "PDJNR 25 VNMG 0.4", "nose_radius": 0.4},
+    "3": {"name": "KANAVKA 3MM", "nose_radius": 0.2},
+    "4": {"name": "REZBA M 60", "nose_radius": 0.1}
+  },
+  "operations": [
+    {"type": "face", "tool": 1, "vc": 180, "lims": 2000, "feed": 0.2, "depth": 1},
+    {"type": "rough", "tool": 1, "vc": 200, "lims": 2000, "feed": 0.25, "depth": 2, "allowance_x": 0.4, "allowance_z": 0.1},
+    {"type": "finish", "tool": 2, "vc": 250, "lims": 2000, "feed": 0.1},
+    {"type": "groove", "tool": 3, "vc": 100, "lims": 1500, "x": 26, "z": -26, "width": 4, "insert_width": 3, "feed": 0.05, "peck": 1, "dwell": 0.3},
+    {"type": "thread", "tool": 4, "rpm": 600, "pitch": 1.5, "x": 30, "z_start": 0, "z_end": -24},
+    {"type": "part", "tool": 3, "vc": 90, "lims": 1500, "z": -88, "feed": 0.06}
+  ]
+}
