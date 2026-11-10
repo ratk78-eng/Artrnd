@@ -1,6 +1,7 @@
 """Art's «Накладка (В1)» K4110.00.00.002 (KOMPAS PDF through libHaru: its font is UTF-8 «Modern-UTF8-H»,
 the diameter sign U+2300): a turned part standing up — the longitudinal section В-В is tall, the
-bore an unhatched strip down its middle — with five grooves (sections А-А, Б-Б) not built yet.
+bore an unhatched strip down its middle — with five grooves: deep at section Б-Б, a notch at А-А,
+their width at each height read off the main view.
 What must hold: the texts are read (Ø16.5…Ø42.3, 188, R648, the mass 0,07), the part is the section's
 fuller wall turned about the bore's middle, standing along Z, 42.3 × 42.3 × 188 exactly; --build
 builds it without KOMPAS errors."""
@@ -35,6 +36,9 @@ print("\n".join(a["geometry"]["notes"]))
 assert a["reading"]["overall"] == {"length": 42.3, "width": 42.3, "height": 188.0}, a["reading"]["overall"]
 ops = drawing.resolve_plan(a["reading"]["plan"]["operations"], a["values"])
 assert ops[0]["op"] == "revolve" and ops[0]["plane"] == "XZ", ops[0]
+# the five grooves: a cut loft of cutter circles, deep at Б-Б (z 17.7), a notch at А-А (z 178.3), copied ×5
+assert [o["op"] for o in ops] == ["revolve", "loft", "circular"] and ops[2]["count"] == 5, [o["op"] for o in ops]
+assert any("5 канавок" in s and "17.7" in s and "178.3" in s for s in a["geometry"]["notes"]), a["geometry"]["notes"]
 ok = True
 if "--build" in sys.argv:
     import kcheck
@@ -45,7 +49,8 @@ if "--build" in sys.argv:
     res = json.loads(r["text"])
     size = res.get("size_mm") or [0, 0, 0]
     print("built", res.get("operations_done"), "/", len(ops), "volume", res.get("volume_mm3"), "size", size)
-    ok = kcheck.check(res) and not res.get("failed") and all(abs(s - w) <= 0.01 for s, w in zip(size, (42.3, 42.3, 188))) \
-        and 85000 < (res.get("volume_mm3") or 0) < 95000
+    # across: the lobes between the grooves (section Б-Б is 41.57 × 39.71 on the sheet)
+    ok = kcheck.check(res) and not res.get("failed") and abs(size[2] - 188) <= 0.01 \
+        and 41.0 < size[0] < 42.4 and 39.3 < size[1] < 40.6 and 60000 < (res.get("volume_mm3") or 0) < 72000
 print("PDF NAKL TEST", "PASSED" if ok else "FAILED")
 shutil.rmtree(folder, ignore_errors=True)

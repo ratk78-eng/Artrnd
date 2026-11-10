@@ -404,7 +404,8 @@ def cut_position(doc: dict, main: tuple, sec: tuple, axis: str) -> float:
     strokes = []
     for e in doc["entities"]:
         # the cutting line's strokes are heavy by the standard, but some systems print them thinner
-        if e["kind"] not in ("solid", "thin") or e.get("from_dimension") or e["type"] not in ("LINE", "LWPOLYLINE"):
+        # (or, as a lone stroke ending nowhere, they are taken for an axis)
+        if e["kind"] not in ("solid", "thin", "center") or e.get("from_dimension") or e["type"] not in ("LINE", "LWPOLYLINE"):
             continue
         for (ax, ay), (bx, by) in _segments(e, 15.0):
             L = math.hypot(bx - ax, by - ay)
@@ -416,7 +417,8 @@ def cut_position(doc: dict, main: tuple, sec: tuple, axis: str) -> float:
                 continue
             c = ((ax + bx) / 2, (ay + by) / 2)
             inside = main[0] + 0.5 < c[0] < main[2] - 0.5 and main[1] + 0.5 < c[1] < main[3] - 0.5
-            if not inside and any(math.dist(c, p) < 15 for p in marks):
+            # (the letter stands off the stroke by up to ~20 mm on a sheet at 1:1 — «Накладка»)
+            if not inside and any(math.dist(c, p) < 25 for p in marks):
                 strokes.append(ax if axis == "x" else ay)
     if not strokes:
         return mid

@@ -2792,13 +2792,220 @@ def _turned_vertical(dxf_path: str, views: list, skip: set, diameters: list, len
         notes = [f"Тело вращения: продольный разрез — вид {si + 1}, ось вертикальная (по середине отверстия "
                  f"шириной {bore_d:.2f}); профиль взят с {'правой' if side > 0 else 'левой'} стенки — она дальше "
                  f"от оси (другая рассечена канавкой). Длина {L_true:g}, наибольший Ø{D:g}"]
+        # the outer profile r(z) of the body, for the grooves cut into it
+        sys.path.insert(0, os.path.dirname(HERE))
+        import kompas_api
+        outer = {}
+        for s in kompas_api.arcs_to_lines(shapes) or shapes:
+            if s.get("type") == "line":
+                for r_, z_ in ((s["x1"], s["y1"]), (s["x2"], s["y2"])):
+                    if r_ > bore_d / 2 + 0.2:
+                        outer[round(z_, 3)] = max(outer.get(round(z_, 3), 0.0), r_)
+        try:
+            g_ops, g_notes = _turned_grooves(doc, views, skip, si, sorted(outer.items()), L_true)
+        except Exception as e:  # noqa: BLE001 — the body stays
+            g_ops, g_notes = [], [f"Канавки не построены: {e}"]
+        ops += g_ops
+        notes += g_notes
         others = [i + 1 for i, u in enumerate(views) if u.get("section") and i != si and i not in skip]
-        if others:
+        if others and not g_ops:
             notes.append("Канавки и вырезы, видимые на поперечных сечениях (вид " + ", ".join(map(str, others)) +
-                         "), пока не построены — построено тело вращения без них")
+                         "), не построены — построено тело вращения без них")
         return {"operations": ops, "notes": notes, "length": round(L_true, 3), "diameter": D, "views": [si],
                 "vertical": True}
     return None
+
+
+def _polar_outline(doc: dict, box) -> tuple | None:
+    """A cross-section of a turned part drawn round its bore (a circle in the middle): its outline's
+    radius at each 2° (largest there), its centre in sheet mm and the bore's radius."""
+    circ = [e for e in doc["entities"] if e["type"] == "CIRCLE" and box[0] < e.get(10, 0) < box[2]
+            and box[1] < e.get(20, 0) < box[3]]
+    if not circ:
+        return None
+    c = min(circ, key=lambda e: math.hypot(e[10] - (box[0] + box[2]) / 2, e[20] - (box[1] + box[3]) / 2))
+    cx, cy = c[10], c[20]
+    prof = [0.0] * 180
+    for e in doc["entities"]:
+        if e["kind"] != "solid" or e["type"] == "CIRCLE":
+            continue
+        pts = dxf._points(e)
+        if not pts or not all(box[0] - 1 <= p[0] <= box[2] + 1 and box[1] - 1 <= p[1] <= box[3] + 1 for p in pts):
+            continue
+        for (ax, ay), (bx, by) in dxf._segments(e):
+            for t in (0, 0.25, 0.5, 0.75, 1):
+                x, y = ax + t * (bx - ax), ay + t * (by - ay)
+                k = int((math.degrees(math.atan2(y - cy, x - cx)) % 360) // 2) % 180
+                prof[k] = max(prof[k], math.hypot(x - cx, y - cy))
+    return prof, (cx, cy), c[40]
+
+
+def _section_grooves(prof: list) -> tuple | None:
+    """Evenly spaced grooves round a cross-section: (n, centre angles in degrees, half-width
+    degrees, depth below the outline's largest radius)."""
+    rmax = max(prof)
+    low = [r > 0 and r < rmax - 0.25 for r in prof]
+    if all(low) or not any(low):
+        return None
+    start = next(i for i in range(180) if not low[i])      # walk round from a full place
+    runs, cur = [], None
+    for j in range(1, 181):
+        i = (start + j) % 180
+        if low[i]:
+            cur = cur or [i, 0, rmax]
+            cur[1] += 1
+            cur[2] = min(cur[2], prof[i])
+        elif cur:
+            runs.append(cur)
+            cur = None
+    if len(runs) < 3:
+        return None
+    n = len(runs)
+    widths = [r[1] for r in runs]
+    if max(widths) - min(widths) > 3:
+        return None
+    centres = [((r[0] + (r[1] - 1) / 2) * 2 + 1) % 360 for r in runs]
+    gaps = sorted(((b - a) % 360 for a, b in zip(sorted(centres), sorted(centres)[1:] + sorted(centres)[:1])))
+    if gaps[-1] - gaps[0] > 6:
+        return None
+    return n, sorted(centres), sum(widths) / n, rmax - sum(r[2] for r in runs) / n
+
+
+def _turned_grooves(doc: dict, views: list, skip: set, si: int, outer: list, L: float) -> tuple:
+    """Grooves along a standing turned part («Накладка»: five, deep at the bottom section Б-Б, a
+    shallow notch at the top section А-А): their number and places come from the cross-sections,
+    their width at each height from the main view (the lines inside its outline are the grooves'
+    edges), their depth from the sections, smoothly in between. Each groove is cut by a loft of
+    circles (a cutter whose radius and distance from the axis change with the height), then
+    copied round the axis."""
+    if len(outer) < 2:
+        return [], []
+
+    def R(z):
+        for (z0, r0), (z1, r1) in zip(outer, outer[1:]):
+            if z0 <= z <= z1 and z1 > z0:
+                return r0 + (r1 - r0) * (z - z0) / (z1 - z0)
+        return outer[0][1] if z < outer[0][0] else outer[-1][1]
+    # the main view: the plain view as tall as the section, beside it
+    sb = views[si]["box_mm"]
+    mains = [i for i, v in enumerate(views) if i != si and i not in skip and not v.get("section") and v.get("box_mm")
+             and abs((v["box_mm"][3] - v["box_mm"][1]) - (sb[3] - sb[1])) < 0.5
+             and abs(v["box_mm"][1] - sb[1]) < 1.0]
+    if not mains:
+        return [], []
+    mb = views[mains[0]]["box_mm"]
+    mx = (mb[0] + mb[2]) / 2
+    # the cross-sections with their grooves and heights
+    secs = []
+    for i, v in enumerate(views):
+        b = v.get("box_mm")
+        if i in (si, mains[0]) or i in skip or not v.get("section") or not b or abs((b[2] - b[0]) - (b[3] - b[1])) > 0.15 * (b[2] - b[0]):
+            continue
+        po = _polar_outline(doc, b)
+        if not po:
+            continue
+        g = _section_grooves(po[0])
+        if not g:
+            continue
+        y = dxf.cut_position(doc, tuple(mb), tuple(b), "y")
+        z = y - mb[1]
+        if not 0 < z < L:
+            continue
+        secs.append({"view": i, "z": z, "n": g[0], "centres": g[1], "half": g[2], "depth": g[3], "r": max(po[0])})
+    if not secs or len({s["n"] for s in secs}) != 1:
+        return [], []
+    secs.sort(key=lambda s: s["z"])
+    n = secs[0]["n"]
+    step = 360.0 / n
+    # the grooves' places from the lowest section (seen from above: its x, y are the model's X, Y);
+    # no twist is told on the drawing — the main view shows them symmetric
+    base = secs[0]["centres"][0] % step
+    # the main view looks from the front (−Y): a groove's edge at angle t is seen at x = r cos t
+    # where sin t < 0. At each height the groove's half-width is what puts the edges onto the lines
+    # drawn inside the outline there.
+    segs = []
+    for e in doc["entities"]:
+        if e["kind"] != "solid":
+            continue
+        pts = dxf._points(e)
+        if pts and all(mb[0] - 1 <= p[0] <= mb[2] + 1 and mb[1] - 1 <= p[1] <= mb[3] + 1 for p in pts):
+            segs += dxf._segments(e)
+    centres = [base + k * step for k in range(n)]
+    z_lo, z_hi = secs[0]["z"], secs[-1]["z"]
+    halves = {}
+    for z in [z_lo + (z_hi - z_lo) * t / 10 for t in range(11)]:
+        y = mb[1] + z
+        r = R(z)
+        xs = []
+        for (ax, ay), (bx, by) in segs:
+            if (ay - y) * (by - y) <= 0 and abs(by - ay) > 1e-9:
+                x = ax + (y - ay) / (by - ay) * (bx - ax) - mx
+                if abs(x) < r - 0.4:
+                    xs.append(x)
+        if not xs:
+            continue
+        best = None
+        for h10 in range(5, int(step * 5)):
+            h = h10 / 10
+            pred = [r * math.cos(math.radians(c + sgn * h)) for c in centres for sgn in (-1, 1)
+                    if math.sin(math.radians(c + sgn * h)) < -0.05]
+            if not pred:
+                continue
+            err = sum(min(abs(p - x) for x in xs) for p in pred) / len(pred)
+            if best is None or err < best[0]:
+                best = (err, h)
+        if best and best[0] < 0.5:
+            halves[z] = best[1]
+    for s in secs:
+        halves.setdefault(s["z"], s["half"])
+    zs = sorted(halves)
+    if len(zs) < 2:
+        return [], []
+    # the depth as a share of the half chord, from the sections, straight between them
+    ratio = {s["z"]: s["depth"] / max(0.1, s["r"] * math.sin(math.radians(s["half"]))) for s in secs}
+
+    def depth_share(z):
+        ks = sorted(ratio)
+        if z <= ks[0]:
+            return ratio[ks[0]]
+        if z >= ks[-1]:
+            return ratio[ks[-1]]
+        for a, b in zip(ks, ks[1:]):
+            if a <= z <= b:
+                return ratio[a] + (ratio[b] - ratio[a]) * (z - a) / (b - a)
+
+    def cutter(z, h):
+        r = R(z)
+        beta = math.radians(h)
+        hc = r * math.sin(beta)
+        rf = r - depth_share(z) * hc
+        den = 2 * (rf - r * math.cos(beta))
+        if abs(den) < 1e-6:
+            return None
+        rho = (2 * r * rf * math.cos(beta) - r * r - rf * rf) / den
+        return (rf + rho, rho) if rho > 0 else None
+    # at most 12 sections (KOMPAS loses its way with more): the ends carried past the part
+    pick = zs if len(zs) <= 10 else [zs[round(k * (len(zs) - 1) / 9)] for k in range(10)]
+    rows = []
+    for z in pick:
+        cr = cutter(z, halves[z])
+        if cr:
+            rows.append((z, cr))
+    if len(rows) < 2:
+        return [], []
+    rows = [(-1.0, rows[0][1])] + rows + [(L + 1.0, rows[-1][1])]
+    a = math.radians(base)
+    sections = [{"offset": round(z, 3), "shapes": [{"type": "circle", "x": round(c * math.cos(a), 4),
+                                                    "y": round(c * math.sin(a), 4), "r": round(rho, 4)}]}
+                for z, (c, rho) in rows]
+    ops = [{"op": "loft", "plane": "XY", "cut": True, "sections": sections,
+            "comment": f"канавка вдоль детали (по сечениям: {len(sections)} шт.)"},
+           {"op": "circular", "plane": "XY", "x": 0, "y": 0, "count": n, "comment": f"канавки: {n} шт. по кругу"}]
+    names = ", ".join(str(s["view"] + 1) for s in secs)
+    notes = [f"{n} канавок по {step:g}° (по сечениям вид {names}): ширина по высоте снята с главного вида, "
+             f"глубина — по сечениям ({', '.join(f'{s['depth']:.2f} мм на высоте {s['z']:.1f}' for s in secs)}), "
+             f"между ними принята плавной; закрутки нет (на главном виде канавки симметричны)"]
+    return ops, notes
 
 
 def _geometry_revolve(a: dict) -> None:
