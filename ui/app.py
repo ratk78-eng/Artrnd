@@ -2729,6 +2729,78 @@ def _turned_part(dxf_path: str, views: list, skip: set, diameters: list, lengths
     return None
 
 
+def _turned_vertical(dxf_path: str, views: list, skip: set, diameters: list, lengths: list = ()) -> dict | None:
+    """A turned part standing up: its longitudinal section is a tall hatched view with the bore as
+    an unhatched strip down the middle («Накладка» K4110: section В-В, 188 high). The axis is the
+    middle of the bore; the wall that reaches furthest from it is the whole profile (a section
+    through a groove shows less on that side), turned about the axis. The body stands along Z."""
+    if not os.path.exists(dxf_path):
+        return None
+    doc = dxf.read_dxf(dxf_path)
+    for si, v in sorted(enumerate(views), key=lambda t: -((t[1].get("box_mm") or [0, 0, 0, 0])[3] - (t[1].get("box_mm") or [0, 0, 0, 0])[1])):
+        b = v.get("box_mm")
+        if si in skip or not b or not v.get("section"):
+            continue
+        w, h = b[2] - b[0], b[3] - b[1]
+        if h < 2.5 * w:
+            continue
+        fs = dxf.faces(doc, b)
+        hs = dxf.hatch_segments(doc, b)
+        mids = [((p[0] + q[0]) / 2, (p[1] + q[1]) / 2) for p, q in hs]
+        full = [f for f in fs if f["box"][3] - f["box"][1] > 0.8 * h]
+        metal = [f for f in full if sum(_in_poly(m, f["outline"]["points"]) for m in mids) >= 3]
+        bore = [f for f in full if f not in metal]
+        if len(metal) == 2:
+            lf, rf = sorted(metal, key=lambda f: f["box"][0])
+            gap = [f for f in bore if f["box"][0] >= lf["box"][2] - 0.3 and f["box"][2] <= rf["box"][0] + 0.3]
+            if not gap:
+                continue
+            axis = (lf["box"][2] + rf["box"][0]) / 2
+            # the wall reaching furthest out is the whole profile
+            prof = max((lf, -1), (rf, 1), key=lambda t: abs((t[0]["box"][0] if t[1] < 0 else t[0]["box"][2]) - axis))
+            bore_d = rf["box"][0] - lf["box"][2]
+        elif len(metal) == 1 and metal[0]["box"][0] < (b[0] + b[2]) / 2 < metal[0]["box"][2]:
+            axis = (b[0] + b[2]) / 2       # solid: one area across the middle (not handled finer yet)
+            continue
+        else:
+            continue
+        f, side = prof
+        radii = sorted({d / 2 for d in diameters})
+        H = b[3] - b[1]
+        L_dim = min(lengths, key=lambda q: abs(q - H), default=None)
+        L_true = L_dim if L_dim is not None and abs(L_dim - H) <= 0.3 else H
+        # the outline's own lowest point is the bottom face (the traced area stops a stroke short)
+        ys = [p[1] for p in f["outline"]["points"]]
+        bottom, top = min(ys), max(ys)
+
+        def fn(p):
+            r = (p[0] - axis) * side
+            z = p[1] - bottom
+            # (this PDF's coordinates are rounded more coarsely: Ø20 came out as 20.13)
+            r = 0.0 if abs(r) < 0.05 else next((q for q in radii if abs(q - r) <= 0.1), r)
+            z = 0.0 if abs(z) < 0.06 else (L_true if abs(p[1] - top) < 0.06 and abs(top - bottom - L_true) < 0.3 else z)
+            return r, z
+        shapes = dxf.outline_shapes(f["outline"], fn)
+        if not shapes:
+            continue
+        Rmax = max(abs(f["box"][0] - axis), abs(f["box"][2] - axis))
+        D = min(diameters, key=lambda q: abs(q - 2 * Rmax), default=2 * Rmax)
+        D = D if abs(D - 2 * Rmax) <= 0.4 else round(2 * Rmax, 2)
+        ax_line = {"type": "line", "x1": 0, "y1": -2, "x2": 0, "y2": L_true + 2, "style": 3}
+        ops = [{"op": "revolve", "plane": "XZ", "angle": 360, "shapes": shapes + [ax_line],
+                "comment": f"тело вращения по разрезу (вид {si + 1}), ось вертикальная"}]
+        notes = [f"Тело вращения: продольный разрез — вид {si + 1}, ось вертикальная (по середине отверстия "
+                 f"шириной {bore_d:.2f}); профиль взят с {'правой' if side > 0 else 'левой'} стенки — она дальше "
+                 f"от оси (другая рассечена канавкой). Длина {L_true:g}, наибольший Ø{D:g}"]
+        others = [i + 1 for i, u in enumerate(views) if u.get("section") and i != si and i not in skip]
+        if others:
+            notes.append("Канавки и вырезы, видимые на поперечных сечениях (вид " + ", ".join(map(str, others)) +
+                         "), пока не построены — построено тело вращения без них")
+        return {"operations": ops, "notes": notes, "length": round(L_true, 3), "diameter": D, "views": [si],
+                "vertical": True}
+    return None
+
+
 def _geometry_revolve(a: dict) -> None:
     """A body of revolution from its longitudinal section: the profile above the axis is traced on
     the picture, scaled by the overall length and snapped to the diameters and lengths read."""
@@ -2837,6 +2909,8 @@ def _geometry(a: dict) -> None:
             vn0 = vector.get("numbers") or {}
             tp = _turned_part(src, vector["views"], skip, vn0.get("diameters", []), vn0.get("values", []),
                               vector.get("bevel"))
+            if not tp:
+                tp = _turned_vertical(src, vector["views"], skip, vn0.get("diameters", []), vn0.get("values", []))
         except Exception as e:  # noqa: BLE001
             tp = None
             print("turned part:", e, flush=True)
@@ -2845,15 +2919,18 @@ def _geometry(a: dict) -> None:
                     default=tp["diameter"])
             D = D if abs(D - tp["diameter"]) <= 0.4 else round(tp["diameter"], 2)
             toothed = any(o.get("op") == "circular" for o in tp["operations"])
-            a["geometry"] = {"notes": tp["notes"] + ([] if toothed else
+            vert = tp.get("vertical")
+            a["geometry"] = {"notes": tp["notes"] + ([] if toothed or vert else
                                                      ["Зубья (если есть) не построены: венец — тело вращения по разрезу"]),
                              "questions": [], "issues": []}
             a["reading"]["plan"] = {"operations": tp["operations"], "source": "picture"}
-            a["reading"]["overall"] = {"length": tp["length"], "width": D, "height": D}
+            # the axis along X (lying) or along Z (standing): the length goes there, the biggest Ø across
+            along = "height" if vert else "length"
+            a["reading"]["overall"] = {k: (tp["length"] if k == along else D) for k in ("length", "width", "height")}
             # the overall sizes in the table: the length along the axis and the biggest Ø both ways
             for d in a["reading"]["dimensions"]:
                 if d.get("overall") and d.get("axis") in ("length", "width", "height"):
-                    v = tp["length"] if d["axis"] == "length" else D
+                    v = tp["length"] if d["axis"] == along else D
                     d["value"] = v
                     a["values"][d["id"]] = v
             return

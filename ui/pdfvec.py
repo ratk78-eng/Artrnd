@@ -289,6 +289,20 @@ class Font:
             self.map = {71: "Ø", 69: "°"}
         self.widths: dict[int, float] = {}
         self.dw = 1000.0 if self.two else 500.0
+        # libHaru's «Modern-UTF8-H» (KOMPAS PDFs through it): the string is UTF-8, one to four bytes
+        # a character, and its own CMap gives each character's CID (for the widths)
+        self.utf8, self.cid = False, {}
+        enc = pdf.r(d.get("Encoding")) if self.two else None
+        if isinstance(enc, dict) and "UTF8" in str(enc.get("CMapName", "")).upper():
+            self.utf8 = True
+            raw = pdf.stream(d["Encoding"])
+            for block in re.findall(rb"begincidrange(.*?)endcidrange", raw, re.S):
+                for a, b, c in re.findall(rb"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*(\d+)", block):
+                    for k in range(int(b, 16) - int(a, 16) + 1):
+                        self.cid[int(a, 16) + k] = int(c) + k
+            for block in re.findall(rb"begincidchar(.*?)endcidchar", raw, re.S):
+                for a, c in re.findall(rb"<([0-9A-Fa-f]+)>\s*(\d+)", block):
+                    self.cid[int(a, 16)] = int(c)
         if self.two:
             desc = pdf.r(pdf.r(d.get("DescendantFonts"))[0])
             self.dw = float(pdf.r(desc.get("DW", 1000)))
@@ -312,6 +326,12 @@ class Font:
 
     def decode(self, s: bytes):
         """(unicode text, advance in text space /1000) of a string shown with this font."""
+        if self.utf8:
+            text = s.decode("utf-8", "replace")
+            cids = [self.cid.get(int.from_bytes(ch.encode("utf-8"), "big")) for ch in text]
+            adv = sum(self.widths.get(c, self.dw) if c is not None else self.dw for c in cids)
+            # the diameter sign as U+2300 «⌀»: the readers know «Ø»
+            return text.replace("⌀", "Ø"), adv, len(text)
         codes = [int.from_bytes(s[k:k + 2], "big") for k in range(0, len(s) - 1, 2)] if self.two else list(s)
         text = "".join(self.map.get(c, chr(c) if not self.two and 32 <= c < 127 else "") for c in codes)
         adv = sum(self.widths.get(c, self.dw) for c in codes)

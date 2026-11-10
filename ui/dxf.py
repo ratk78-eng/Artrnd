@@ -1028,9 +1028,11 @@ def stamp_info(doc: dict) -> dict:
              if e["type"] in ("TEXT", "MTEXT") and e.get("text") and isinstance(e.get(10), (int, float))]
     out = {}
     for t, e in texts:
-        if re.fullmatch(r"[МM]асса", t.strip(), re.I):
+        # «Масса» alone, or run together with the next cell's heading («Масса Масштаб»)
+        mm = re.match(r"\s*(?:\S+\s+)*?([МM]асса)\b", t)
+        if mm and len(t.strip()) <= 20:
             h = float(e.get(40) or 3.5)
-            mx, my = e[10] + 0.6 * h * len(t) / 2, e.get(20, 0.0)
+            mx, my = e[10] + 0.6 * h * (mm.start(1) + 2.5), e.get(20, 0.0)
             cand = []
             for t2, e2 in texts:
                 if re.fullmatch(r"\d+(?:[.,]\d+)?", t2.strip()):
